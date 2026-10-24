@@ -1,0 +1,33 @@
+EMBRIS for Linux - key & click macro
+====================================
+
+Note: Roblox doesn't officially run on Linux. Embris works with whatever you
+play it through (for example Sober) and with any other app.
+
+Install
+1. Unzip Embris-Linux.zip.
+2. Open a terminal in the unzipped folder and run:
+       bash install.sh
+3. If Python, xdotool or a Qt library are missing it shows the command to
+   install them and asks before running it (this needs your password).
+4. The first install downloads Qt (about 80 MB). Embris opens when it's done.
+   Later, open it from your app menu or run:  embris
+
+Works best on X11
+   Sending keys and the global hotkey work on X11 / Xorg desktops. On Wayland
+   they may not work - if nothing happens, log out and pick an "X11" or "Xorg"
+   session on the login screen.
+
+Use it
+- Macro page: set the key and interval. Keep "Bring the game to the front first"
+  on and type part of the game's window title (e.g. Sober).
+- Press F6 to start or stop (change it on the Hotkeys page).
+- Record: click Record (or press F8), do your moves, press F8 again to stop.
+- Sequence editor / Timeline editor: edit what you recorded. Auto clicker page: simple clicking (F7).
+- Already have Embris? Run install.sh again to update.
+- Presets page: save setups, or build a macro step by step.
+- Closing the window keeps Embris running in the tray (turn that off in Settings).
+  Some desktops (like plain GNOME) have no tray; there Embris just quits on close.
+
+Uninstall
+       bash uninstall.sh

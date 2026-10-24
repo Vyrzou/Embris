@@ -1,0 +1,32 @@
+EMBRIS for Mac - key & click macro
+==================================
+
+Install
+1. Unzip Embris-Mac.zip (double-click it).
+2. Right-click "Install Embris.command" and choose Open, then click Open again.
+   (Right-click > Open is needed the first time because the installer isn't
+   signed by Apple. A Terminal window shows the progress.)
+3. If it says Python is needed, it opens python.org - install the macOS
+   version, then run the installer again.
+4. The first install downloads Qt (about 80 MB). Embris opens when it's done.
+   You'll find it later in the Applications folder inside your home folder.
+
+Allow it to control your Mac (one time)
+   macOS blocks apps from pressing keys until you allow them:
+   System Settings > Privacy & Security > Accessibility       -> turn on Embris
+   System Settings > Privacy & Security > Input Monitoring    -> turn on Embris
+   Then quit and reopen Embris. If it isn't in the list, click + and add it
+   from your home folder's Applications folder.
+
+Use it
+- Macro page: set the key and interval, and keep "Bring the game to the front
+  first" on with the app name "Roblox".
+- Press F6 to start or stop (many Macs need fn + F6). Change it on the Hotkeys page.
+- Record: click Record (or press F8), do your moves in Roblox, press F8 again to stop.
+- Sequence editor / Timeline editor: edit what you recorded. Auto clicker page: simple clicking (F7).
+- Already have Embris? Run the installer again to update.
+- Presets page: save setups, or build a macro step by step.
+- Closing the window keeps Embris running in the menu bar (turn that off in Settings).
+
+Uninstall
+   Double-click "Uninstall Embris.command" (right-click > Open the first time).

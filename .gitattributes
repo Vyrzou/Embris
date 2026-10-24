@@ -1,0 +1,9 @@
+# Mac/Linux scripts must keep Unix line endings to run.
+*.sh       text eol=lf
+*.command  text eol=lf
+*.py       text eol=lf
+
+# Binary assets
+*.ico   binary
+*.png   binary
+*.icns  binary
