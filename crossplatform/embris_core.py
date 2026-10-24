@@ -13,7 +13,7 @@ import time
 
 from pynput import keyboard, mouse
 
-VERSION = "1.7.0"
+VERSION = "1.7.1"
 IS_MAC = sys.platform == "darwin"
 
 # New versions are published as GitHub Releases.

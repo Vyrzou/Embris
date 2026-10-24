@@ -1247,6 +1247,13 @@ class MainWindow(QMainWindow):
         sub_row = QHBoxLayout()
         sub_row.setSpacing(6)
         sub_row.addWidget(summary)
+        open_btn = push("📂", "chip", lambda: self.show_open_preset_menu(open_btn))
+        open_btn.setToolTip("Open a preset or recording from your suite to edit it")
+        clear_btn = push("🗑", "chip", self.clear_sequence)
+        clear_btn.setToolTip("Clear the sequence (Ctrl+Z brings it back)")
+        for b in (open_btn, clear_btn):
+            b.setFixedWidth(36)
+            sub_row.addWidget(b)
         undo_btn = push("↶", "chip", self.undo)
         redo_btn = push("↷", "chip", self.redo)
         undo_btn.setToolTip("Undo (Ctrl+Z)")
@@ -2698,12 +2705,45 @@ class MainWindow(QMainWindow):
             return
         p = self.presets[row]
         self.s.update(p["settings"])
+        # A simple preset (press a key / click every so often) becomes the same steps as a sequence,
+        # so it shows in the editors and can be edited there. It runs just as before.
+        if not self.s.get("sequence"):
+            simple = core.single_action_steps(self.s)
+            if simple:
+                self.s["sequence"] = [dict(st) for st in simple]
+                self.s["use_sequence"] = True
         self.last_preset_name = p["name"]
         self.timeline_needs_fit = True
         QTimer.singleShot(0, self.reset_undo)  # a loaded macro starts a fresh history
         self.save()
         self.write_controls()
         self.set_status("ready", 'Loaded "%s"' % p["name"], "Press %s or click Run macro to start it." % key_label(self.s["hotkey"]))
+
+    def show_open_preset_menu(self, button):
+        """The editors' open button: pick a preset or recording from the suite to edit."""
+        menu = QMenu(self)
+        if not self.presets:
+            menu.addAction("No presets yet: save one on the Presets page").setEnabled(False)
+        for n, p in enumerate(self.presets):
+            menu.addAction(p["name"], lambda n=n: self.open_preset_in_editor(n))
+        menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
+
+    def open_preset_in_editor(self, n):
+        if self.running:
+            self.set_status("problem", "Stop the macro first", "Then open the preset.")
+            return
+        self.preset_list.setCurrentRow(n)
+        self.load_preset()
+
+    def clear_sequence(self):
+        """The editors' clear button: empties the sequence (undo brings it back)."""
+        if not self.seq:
+            return
+        if self.running and self.s.get("use_sequence"):
+            self.stop()
+        self.seq.clear()
+        self.sequence_changed()
+        self.set_status("ready", "Sequence cleared", "Ctrl+Z or the undo button brings it back.")
 
     def delete_preset(self):
         row = self.preset_list.currentRow()

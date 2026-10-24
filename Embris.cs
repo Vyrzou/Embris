@@ -1865,15 +1865,21 @@ namespace Embris
             p.Controls[0].Width = Ui.S(220);
             p.Controls[0].Tag = Fixed;
             e.Summary = (TextLabel)p.Controls[1];
-            e.Summary.Width = Ui.S(216);
+            e.Summary.Width = Ui.S(164);
             e.Summary.Tag = Fixed;
             // Icon buttons beside the title keep their size and place, so a wide window can't
             // stretch them into the Record button.
-            e.Undo = Add(p, Tagged(new RoundButton { Style = BtnStyle.Chip, Icon = "\uE7A7", Text = "" }, Fixed), 256, 56, 36, 30);
-            e.Redo = Add(p, Tagged(new RoundButton { Style = BtnStyle.Chip, Icon = "\uE7A6", Text = "" }, Fixed), 296, 56, 36, 30);
-            var calibrate = Add(p, Tagged(new RoundButton { Style = BtnStyle.Chip, Icon = "\uE1D2", Text = "" }, Fixed), 336, 56, 36, 30);
+            var open = Add(p, Tagged(new RoundButton { Style = BtnStyle.Chip, Icon = "\uE8E5", Text = "" }, Fixed), 200, 56, 34, 30);
+            open.Click += (s, a) => ShowOpenPresetMenu(open);
+            tips.SetToolTip(open, "Open a preset or recording from your suite to edit it");
+            var clear = Add(p, Tagged(new RoundButton { Style = BtnStyle.Chip, Icon = "\uE74D", Text = "" }, Fixed), 238, 56, 34, 30);
+            clear.Click += (s, a) => ClearSequence();
+            tips.SetToolTip(clear, "Clear the sequence (Ctrl+Z brings it back)");
+            e.Undo = Add(p, Tagged(new RoundButton { Style = BtnStyle.Chip, Icon = "\uE7A7", Text = "" }, Fixed), 276, 56, 34, 30);
+            e.Redo = Add(p, Tagged(new RoundButton { Style = BtnStyle.Chip, Icon = "\uE7A6", Text = "" }, Fixed), 314, 56, 34, 30);
+            var calibrate = Add(p, Tagged(new RoundButton { Style = BtnStyle.Chip, Icon = "\uE1D2", Text = "" }, Fixed), 352, 56, 34, 30);
             calibrate.Click += (s, a) => ShowCalibrationMenu(calibrate);
-            foreach (var chip in new Control[] { e.Undo, e.Redo, calibrate }) chip.BringToFront();
+            foreach (var chip in new Control[] { open, clear, e.Undo, e.Redo, calibrate }) chip.BringToFront();
             tips.SetToolTip(calibrate, "Calibration: a crosshair and a ghost of your start view over the game, to line every run up the same way");
             e.Undo.Click += (s, a) => Undo();
             e.Redo.Click += (s, a) => Redo();
@@ -3761,6 +3767,18 @@ namespace Embris
             if (i < 0 || running) return;
             settings.Apply(Settings.ParseLines(presets[i].Lines));
             sequence = RecStep.Parse(settings.Recording);
+            // A simple preset (press a key / click every so often) becomes the same steps as a sequence,
+            // so it shows in the editors and can be edited there. It runs just as before.
+            if (!settings.UseRecording || sequence.Count == 0)
+            {
+                var simple = SimpleSteps();
+                if (sequence.Count == 0 && simple.Count > 0)
+                {
+                    sequence = simple;
+                    settings.Recording = RecStep.Serialize(sequence);
+                    settings.UseRecording = true;
+                }
+            }
             lastPresetName = presets[i].Name;
             timelineNeedsFit = true;
             settings.Save();
@@ -4259,6 +4277,12 @@ namespace Embris
             }
 
             // The single click and key press play as a tiny sequence, so long holds never freeze the window.
+            StartPlayback(target, SimpleSteps(), 1, 1);
+        }
+
+        // The Macro page's click and key press as steps.
+        List<RecStep> SimpleSteps()
+        {
             var steps = new List<RecStep>();
             if (settings.ClickEnabled)
             {
@@ -4271,7 +4295,36 @@ namespace Embris
                 steps.Add(new RecStep { Kind = 0, Code = (int)settings.ActionKey });
                 steps.Add(new RecStep { Kind = 1, Code = (int)settings.ActionKey, Delay = settings.HoldMs });
             }
-            StartPlayback(target, steps, 1, 1);
+            return steps;
+        }
+
+        // The editors' "open" button: pick a preset or recording from the suite to edit.
+        void ShowOpenPresetMenu(Control button)
+        {
+            var menu = NewMenu();
+            if (presets.Count == 0) AddMenuItem(menu, "No presets yet: save one on the Presets page", () => { }, false);
+            for (int i = 0; i < presets.Count; i++)
+            {
+                int n = i;
+                AddMenuItem(menu, presets[i].Name, () =>
+                {
+                    if (running) { SetStatus(StatusKind.Problem, "Stop the macro first", "Then open the preset."); return; }
+                    presetList.SelectedIndex = n;
+                    LoadPreset();
+                }, true);
+            }
+            menu.Show(button, new Point(0, button.Height + Ui.S(4)));
+        }
+
+        // The editors' "clear" button: empties the sequence (undo brings it back).
+        void ClearSequence()
+        {
+            if (sequence.Count == 0) return;
+            if (running && settings.UseRecording) Stop();
+            sequence.Clear();
+            SequenceChanged();
+            if (stepTable != null) stepTable.SelectRows(-1, -1);
+            SetStatus(StatusKind.Ready, "Sequence cleared", "Ctrl+Z or the undo button brings it back.");
         }
 
         void StartPlayback(IntPtr target, List<RecStep> steps, double speed, int repeat)
