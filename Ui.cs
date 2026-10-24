@@ -1,4 +1,4 @@
-﻿// UI building blocks for Embris: theme colors and owner-drawn controls.
+// UI building blocks for Embris: theme colors and owner-drawn controls.
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -331,12 +331,53 @@ namespace Embris
             }
         }
 
+        // Spare window-sized frames: a video makes several a second, so finished ones are reused
+        // instead of allocating (and zeroing) new full-window pictures every time.
+        static readonly List<Bitmap> spare = new List<Bitmap>();
+
+        // A frame of the given size and format, recycled if there is one. Any thread.
+        public static Bitmap Take(int w, int h, System.Drawing.Imaging.PixelFormat format)
+        {
+            lock (spare)
+                for (int i = spare.Count - 1; i >= 0; i--)
+                {
+                    var b = spare[i];
+                    if (b.Width != w || b.Height != h || b.PixelFormat != format) continue;
+                    spare.RemoveAt(i);
+                    return b;
+                }
+            return new Bitmap(w, h, format);
+        }
+
+        // Frees the spare frames (the background stopped or was unloaded).
+        public static void ClearSpares()
+        {
+            lock (spare)
+            {
+                foreach (var b in spare) b.Dispose();
+                spare.Clear();
+            }
+        }
+
+        // Hands a frame back for reuse (keeps a couple; the rest are freed).
+        public static void Give(Bitmap b)
+        {
+            if (b == null) return;
+            Bitmap drop = null;
+            lock (spare)
+            {
+                spare.Add(b);
+                if (spare.Count > 2) { drop = spare[0]; spare.RemoveAt(0); }
+            }
+            if (drop != null) drop.Dispose();
+        }
+
         // Tints a scaled frame with the current layers. Safe to call from the video thread.
         public static Bitmap Compose(Bitmap scaled)
         {
             if (scaled == null) return null;
             var ls = layers;
-            var bmp = new Bitmap(scaled.Width, scaled.Height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            var bmp = Take(scaled.Width, scaled.Height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
             using (var g = Graphics.FromImage(bmp))
             {
                 g.CompositingMode = CompositingMode.SourceCopy;
@@ -366,8 +407,8 @@ namespace Embris
             var oldFrame = frame;
             plain = scaled;
             frame = composed;
-            if (oldPlain != null && oldPlain != scaled) lock (oldPlain) oldPlain.Dispose();
-            if (oldFrame != null && oldFrame != composed) oldFrame.Dispose();
+            if (oldPlain != null && oldPlain != scaled) lock (oldPlain) Give(oldPlain);
+            if (oldFrame != null && oldFrame != composed) Give(oldFrame);
         }
 
         public static void SetFrame(Bitmap scaled) { SetFrame(scaled, null); }
@@ -413,7 +454,18 @@ namespace Embris
             Point p = root.PointToClient(c.PointToScreen(Point.Empty));
             var old = g.CompositingMode;
             g.CompositingMode = CompositingMode.SourceCopy;
-            g.DrawImage(f, new Rectangle(0, 0, c.Width, c.Height), new Rectangle(p.X, p.Y, c.Width, c.Height), GraphicsUnit.Pixel);
+            var rs = root.ClientSize;
+            if (f.Width == rs.Width && f.Height == rs.Height)
+                g.DrawImage(f, new Rectangle(0, 0, c.Width, c.Height), new Rectangle(p.X, p.Y, c.Width, c.Height), GraphicsUnit.Pixel);
+            else if (rs.Width > 0 && rs.Height > 0)
+            {
+                // The window is being resized and the frame hasn't caught up yet: stretch it to fit.
+                float sx = f.Width / (float)rs.Width, sy = f.Height / (float)rs.Height;
+                var oldMode = g.InterpolationMode;
+                g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                g.DrawImage(f, new RectangleF(0, 0, c.Width, c.Height), new RectangleF(p.X * sx, p.Y * sy, c.Width * sx, c.Height * sy), GraphicsUnit.Pixel);
+                g.InterpolationMode = oldMode;
+            }
             g.CompositingMode = old;
         }
     }

@@ -1,4 +1,4 @@
-﻿// Custom backgrounds: pictures, animated GIFs and videos (decoded by Windows' Media Foundation, on the
+// Custom backgrounds: pictures, animated GIFs and videos (decoded by Windows' Media Foundation, on the
 // graphics card when it can), loaded from a file or downloaded from a link. A link can be a direct
 // image/video address or a web page (wallpaper sites, Pinterest...) that contains one.
 using System;
@@ -21,8 +21,8 @@ namespace Embris
         const long MaxDownload = 300L * 1024 * 1024;
 
         static Control host;
-        static Image still;          // picture or GIF (GIFs animate through ImageAnimator)
-        static bool animating;
+        static Image still;          // a picture
+        static GifFrames gif;        // an animated GIF
         static VideoFrames video;
         static volatile bool paused;
         static int generation; // frames from a background that was replaced are ignored
@@ -48,22 +48,46 @@ namespace Embris
         {
             host = form;
             Backdrop.Attach(form);
-            form.Resize += (s, e) => { if (video != null) video.SetHostSize(HostSize); Rescale(); SetPaused(!form.Visible || ((Form)form).WindowState == FormWindowState.Minimized); };
+            form.Resize += (s, e) =>
+            {
+                SetPaused(!form.Visible || ((Form)form).WindowState == FormWindowState.Minimized);
+                if (Sizing) { resizedWhileSizing = true; return; } // dragging the edge: done once at the end (SizingDone)
+                if (video != null) video.SetHostSize(HostSize);
+                Rescale();
+            };
             form.VisibleChanged += (s, e) => SetPaused(!form.Visible);
             ((Form)form).Activated += (s, e) => inactive = false;
             ((Form)form).Deactivate += (s, e) => inactive = true;
         }
 
+        // True while the window edge is being dragged. The background keeps its current frame (stretched
+        // to fit) instead of rescaling on every step, so resizing stays smooth.
+        public static volatile bool Sizing;
+        static volatile bool resizedWhileSizing; // Sizing is also on while the window is only moved: frames keep coming then
+
+        public static void SizingDone()
+        {
+            Sizing = false;
+            if (!resizedWhileSizing) return;
+            resizedWhileSizing = false;
+            if (video != null) video.SetHostSize(HostSize);
+            if (gif != null) gif.Restart();
+            Rescale();
+            Backdrop.Retint();
+            if (host != null) host.Invalidate(true);
+        }
+
         public static void Stop()
         {
-            if (animating && still != null) ImageAnimator.StopAnimate(still, OnGifFrame);
-            animating = false;
+            if (gif != null) gif.Dispose();
+            gif = null;
             if (still != null) still.Dispose();
             still = null;
             if (video != null) video.Dispose();
             video = null;
             generation++;
             Backdrop.SetFrame(null);
+            Backdrop.ClearSpares();
             if (host != null) host.Invalidate(true);
         }
 
@@ -95,10 +119,13 @@ namespace Embris
                     return null;
                 }
                 still = LoadImage(path);
-                if (ImageAnimator.CanAnimate(still))
+                if (GifFrames.IsAnimated(still))
                 {
-                    animating = true;
-                    ImageAnimator.Animate(still, OnGifFrame);
+                    // Animated GIF: decoded, scaled and tinted on its own thread, like a video.
+                    var frames = still;
+                    still = null;
+                    gif = new GifFrames(frames, () => HostSize, raw => OnVideoFrame(raw, gen));
+                    return null;
                 }
                 Rescale();
                 return null;
@@ -149,22 +176,10 @@ namespace Embris
             host.Invalidate(true);
         }
 
-        static void OnGifFrame(object sender, EventArgs e)
-        {
-            if (paused || host == null || !host.IsHandleCreated) return;
-            try
-            {
-                host.BeginInvoke((Action)(() =>
-                {
-                    if (still == null) return;
-                    lock (still) ImageAnimator.UpdateFrames(still);
-                    Rescale();
-                }));
-            }
-            catch (InvalidOperationException) { }
-        }
-
         static volatile bool framePending; // a frame is waiting for the window: skip new ones until it's shown
+
+        // Whether a new frame would be shown now; the decoders skip copying frames out when it wouldn't.
+        public static bool WantsFrame { get { return host != null && !paused && !framePending && !(Sizing && resizedWhileSizing); } }
         static double paintMs = 10;        // how long a repaint takes (smoothed)
         static volatile bool inactive;     // another app is in front
         public static bool UseGpu = true;  // decode on the graphics card (Direct3D 11) when it can
@@ -176,9 +191,12 @@ namespace Embris
         static void OnVideoFrame(Bitmap raw, int gen)
         {
             var h = host;
-            if (h == null || paused || gen != generation || framePending) { raw.Dispose(); return; }
-            var scaled = Backdrop.Cover(raw, HostSize);
-            raw.Dispose();
+            if (!WantsFrame || gen != generation) { Backdrop.Give(raw); return; }
+            // Usually already the window's size (videos are scaled by the graphics card): use it as is.
+            var size = HostSize;
+            Bitmap scaled;
+            if (raw.Width == size.Width && raw.Height == size.Height) scaled = raw;
+            else { scaled = Backdrop.Cover(raw, size); Backdrop.Give(raw); }
             if (scaled == null) return;
             var composed = Backdrop.Compose(scaled);
             framePending = true;
@@ -187,7 +205,7 @@ namespace Embris
                 h.BeginInvoke((Action)(() =>
                 {
                     framePending = false;
-                    if (video == null || gen != generation) { scaled.Dispose(); composed.Dispose(); return; }
+                    if ((video == null && gif == null) || gen != generation) { Backdrop.Give(scaled); Backdrop.Give(composed); return; }
                     // Repaint now, timing it: when the window takes long to paint (big or busy), frames come
                     // less often so the window stays responsive.
                     var clock = System.Diagnostics.Stopwatch.StartNew();
@@ -205,10 +223,13 @@ namespace Embris
                     // and less if the window can't repaint that fast.
                     double cap = 1000.0 / Math.Max(10, Fps);
                     if (inactive) cap = Math.Max(cap, 1000.0 / 15);
-                    if (v != null) v.MinFrameMs = Math.Max(cap, Math.Min(125, paintMs * (Fps >= 60 ? 1.6 : 2.5)));
+                    double min = Math.Max(cap, Math.Min(125, paintMs * (Fps >= 60 ? 1.6 : 2.5)));
+                    if (v != null) v.MinFrameMs = min;
+                    var gf = gif;
+                    if (gf != null) gf.MinFrameMs = (float)min;
                 }));
             }
-            catch (InvalidOperationException) { framePending = false; scaled.Dispose(); composed.Dispose(); }
+            catch (InvalidOperationException) { framePending = false; Backdrop.Give(scaled); Backdrop.Give(composed); }
         }
 
         // Marks everything the background shows through for repainting, skipping solid cards and what
@@ -233,10 +254,32 @@ namespace Embris
             }
         }
 
+        static System.Windows.Forms.Timer trimTimer;
+        [DllImport("kernel32.dll")] static extern bool SetProcessWorkingSetSize(IntPtr process, IntPtr min, IntPtr max);
+
         public static void SetPaused(bool pause)
         {
             paused = pause;
             if (video != null) video.SetPaused(pause);
+            if (gif != null) gif.Paused = pause;
+            // Minimized or in the tray (while you play): after a few seconds hand the memory Embris isn't
+            // using back to Windows, so the game gets it. (Fully unloading the video gives nothing more
+            // back: Windows' video components keep their memory either way.)
+            if (trimTimer == null)
+            {
+                trimTimer = new System.Windows.Forms.Timer { Interval = 3000 };
+                trimTimer.Tick += (s, e) => { trimTimer.Stop(); if (paused) TrimMemory(); };
+            }
+            trimTimer.Stop();
+            if (pause) trimTimer.Start();
+        }
+
+        static void TrimMemory()
+        {
+            Backdrop.ClearSpares();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            try { SetProcessWorkingSetSize(System.Diagnostics.Process.GetCurrentProcess().Handle, (IntPtr)(-1), (IntPtr)(-1)); } catch (Exception) { }
         }
 
         // ---------------------------------------------------------------- links
@@ -362,6 +405,83 @@ namespace Embris
                 if (score > bestScore) { bestScore = score; best = u.AbsoluteUri; }
             }
             return best;
+        }
+    }
+
+    // Plays an animated GIF on its own thread: each frame is decoded and scaled to the window there and
+    // handed out at the GIF's own pace (skipping frames when the window can't keep up, so it never
+    // slows down), so the window only has to copy finished frames.
+    sealed class GifFrames : IDisposable
+    {
+        readonly Image img;               // used only by the GIF thread
+        readonly Func<Size> size;
+        readonly Action<Bitmap> onFrame;
+        readonly int[] delays;            // ms per frame
+        readonly Thread thread;
+        readonly AutoResetEvent wake = new AutoResetEvent(false);
+        volatile bool stop;
+        public volatile bool Paused;
+        public volatile float MinFrameMs = 16; // set from how fast the window repaints
+
+        public static bool IsAnimated(Image i)
+        {
+            return Array.IndexOf(i.FrameDimensionsList, FrameDimension.Time.Guid) >= 0 && i.GetFrameCount(FrameDimension.Time) > 1;
+        }
+
+        public GifFrames(Image image, Func<Size> size, Action<Bitmap> onFrame)
+        {
+            img = image;
+            this.size = size;
+            this.onFrame = onFrame;
+            int count = img.GetFrameCount(FrameDimension.Time);
+            delays = new int[count];
+            byte[] raw = null;
+            try { raw = img.GetPropertyItem(0x5100).Value; } catch (ArgumentException) { } // PropertyTagFrameDelay, 1/100 s each
+            for (int i = 0; i < count; i++)
+            {
+                int d = raw != null && raw.Length >= (i + 1) * 4 ? BitConverter.ToInt32(raw, i * 4) * 10 : 100;
+                delays[i] = d < 20 ? 100 : d; // like browsers: "as fast as possible" GIFs play at 10 fps
+            }
+            thread = new Thread(Run) { IsBackground = true, Name = "Embris GIF" };
+            thread.Start();
+        }
+
+        public void Restart() { wake.Set(); }
+
+        void Run()
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            double due = 0, lastShown = -1000;
+            int i = 0, count = delays.Length;
+            while (!stop)
+            {
+                if (Paused) { wake.WaitOne(200); clock.Restart(); due = 0; lastShown = -1000; continue; }
+                double now = clock.Elapsed.TotalMilliseconds;
+                double next = Math.Max(due, lastShown + MinFrameMs);
+                if (now < next) { wake.WaitOne((int)Math.Ceiling(next - now)); continue; }
+                // Running late (a busy window): skip ahead so the animation keeps its real speed.
+                for (int n = 0; n < count && due + delays[i] <= now; n++) { due += delays[i]; i = (i + 1) % count; }
+                if (now - due > 1000) due = now; // fell far behind (the PC was asleep...): start fresh
+                try
+                {
+                    img.SelectActiveFrame(FrameDimension.Time, i);
+                    if (!Background.WantsFrame) { lastShown = clock.Elapsed.TotalMilliseconds; due += delays[i]; i = (i + 1) % count; continue; }
+                    var frame = Backdrop.Cover(img, size());
+                    if (frame != null) onFrame(frame);
+                }
+                catch (Exception) { } // a broken frame: skip it
+                lastShown = clock.Elapsed.TotalMilliseconds;
+                due += delays[i];
+                i = (i + 1) % count;
+            }
+        }
+
+        public void Dispose()
+        {
+            stop = true;
+            wake.Set();
+            if (Thread.CurrentThread != thread) thread.Join(1000);
+            img.Dispose();
         }
     }
 
@@ -512,6 +632,7 @@ namespace Embris
                     double dueMs = (loopOffset + ts) / 10000.0, nowMs = clock.Elapsed.TotalMilliseconds;
                     if (nowMs - dueMs > 80 || dueMs - lastShown < MinFrameMs - 2) { Marshal.ReleaseComObject(sample); continue; }
                     while (!stop && clock.Elapsed.TotalMilliseconds < dueMs) Thread.Sleep(2);
+                    if (!Background.WantsFrame) { Marshal.ReleaseComObject(sample); continue; } // the window is busy: don't copy it out
                     var bmp = Copy(sample, ow, oh);
                     Marshal.ReleaseComObject(sample);
                     if (bmp == null) { if (hardware && !gotFrame) return false; continue; }
@@ -545,7 +666,7 @@ namespace Embris
                 try
                 {
                     if (len < w * h * 4) return null;
-                    var bmp = new Bitmap(w, h, PixelFormat.Format32bppRgb);
+                    var bmp = Backdrop.Take(w, h, PixelFormat.Format32bppRgb);
                     var bd = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppRgb);
                     if (bd.Stride == w * 4) Mf.CopyMemory(bd.Scan0, data, (IntPtr)(w * h * 4));
                     else for (int y = 0; y < h; y++) Mf.CopyMemory(bd.Scan0 + y * bd.Stride, data + y * w * 4, (IntPtr)(w * 4));

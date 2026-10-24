@@ -1023,8 +1023,18 @@ namespace Embris
                     restoreFull = false;
                     BeginInvoke((Action)ResetWindowSize);
                 }
-                Relayout();
+                // Dragging the window edge: only stretch the page and move the bottom bar (cheap, so the
+                // window keeps up with the mouse); everything inside is laid out once you pause or let go.
+                if (Background.Sizing && WindowState == FormWindowState.Normal && baseBounds != null && !isCompact)
+                {
+                    StretchDuringDrag();
+                    settleTimer.Stop();
+                    settleTimer.Start();
+                    return;
+                }
+                RelayoutInOnePaint();
             };
+            settleTimer.Tick += (s, e) => { settleTimer.Stop(); RelayoutInOnePaint(); };
 
             ResumeLayout(false);
 
@@ -1154,20 +1164,70 @@ namespace Embris
                 ResumeLayout();
                 return;
             }
-            int dW = ClientSize.Width - baseClient.Width, dH = ClientSize.Height - baseClient.Height;
             foreach (Control c in Controls)
             {
-                Rectangle b;
                 var box = c as Box;
-                if (box == null || box == mini || !baseBounds.TryGetValue(c, out b)) continue;
+                if (box == null || box == mini || !baseBounds.ContainsKey(c)) continue;
                 if (box.Role == BoxRole.Sidebar) { LayoutSidebar(); continue; }
-                if (box.Role == BoxRole.Bar) c.SetBounds(b.X - shift, b.Y + dH, b.Width + dW + shift, b.Height);
-                else c.SetBounds(b.X - shift, b.Y, b.Width + dW + shift, b.Height + dH);
-                LayoutChildren(box);
+                // Hidden pages are laid out when they're opened: resizing only moves what you can see.
+                if (box.Role == BoxRole.Page && !box.Visible) { stalePages.Add(box); continue; }
+                PlaceBox(box);
             }
             ResumeLayout();
             UpdateSequenceViews();
             ApplyGlass();
+        }
+
+        readonly HashSet<Box> stalePages = new HashSet<Box>(); // pages not yet laid out for the current window size
+        readonly System.Windows.Forms.Timer settleTimer = new System.Windows.Forms.Timer { Interval = 120 };
+
+        // While the edge is dragged: the open page and the bottom bar follow the window, nothing else moves.
+        void StretchDuringDrag()
+        {
+            int shift = Ui.S(220) - SidebarWidth;
+            int dW = ClientSize.Width - baseClient.Width, dH = ClientSize.Height - baseClient.Height;
+            // Shrinking below the normal size switches to the compact view: do the full layout for that.
+            if (ClientSize.Width + shift < baseClient.Width || ClientSize.Height < baseClient.Height) { RelayoutInOnePaint(); return; }
+            SuspendLayout();
+            foreach (Control c in Controls)
+            {
+                var box = c as Box;
+                Rectangle b;
+                if (box == null || !box.Visible || box == mini || !baseBounds.TryGetValue(c, out b)) continue;
+                if (box.Role == BoxRole.Sidebar) LayoutSidebar();
+                else if (box.Role == BoxRole.Bar) box.SetBounds(b.X - shift, b.Y + dH, b.Width + dW + shift, b.Height);
+                else if (box.Role == BoxRole.Page) box.SetBounds(b.X - shift, b.Y, b.Width + dW + shift, b.Height + dH);
+            }
+            ResumeLayout(false);
+        }
+
+        // Fits a page or the bottom bar (and everything in it) to the window.
+        void PlaceBox(Box box)
+        {
+            Rectangle b = baseBounds[box];
+            int shift = Ui.S(220) - SidebarWidth;
+            int dW = ClientSize.Width - baseClient.Width, dH = ClientSize.Height - baseClient.Height;
+            if (box.Role == BoxRole.Bar) box.SetBounds(b.X - shift, b.Y + dH, b.Width + dW + shift, b.Height);
+            else box.SetBounds(b.X - shift, b.Y, b.Width + dW + shift, b.Height + dH);
+            LayoutChildren(box);
+            stalePages.Remove(box);
+        }
+
+        [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")] static extern bool RedrawWindow(IntPtr hWnd, IntPtr rect, IntPtr region, uint flags);
+
+        // Resizing: move everything with drawing switched off, then paint the window once. Without
+        // this each control repaints as it moves and the window flickers and lags behind the mouse.
+        void RelayoutInOnePaint()
+        {
+            if (!IsHandleCreated || !Visible) { Relayout(); return; }
+            SendMessage(Handle, 0x0B, IntPtr.Zero, IntPtr.Zero); // WM_SETREDRAW off
+            try { Relayout(); }
+            finally
+            {
+                SendMessage(Handle, 0x0B, (IntPtr)1, IntPtr.Zero);
+                RedrawWindow(Handle, IntPtr.Zero, IntPtr.Zero, 0x1 | 0x4 | 0x80 | 0x100 | 0x400); // invalidate, erase, all children, now, frame
+            }
         }
 
         // See-through cards look best but every control on them is redrawn with each video frame;
@@ -1464,6 +1524,7 @@ namespace Embris
         {
             currentPage = index;
             if (isCompact) return;
+            if (stalePages.Contains(pages[index])) PlaceBox(pages[index]);
             if (index == 3 && timelineNeedsFit && timeline != null) { timeline.Fit(); timelineNeedsFit = false; }
             for (int i = 0; i < pages.Length; i++)
             {
@@ -3787,6 +3848,14 @@ namespace Embris
                     if (file.Length > 0 && File.Exists(file)) OpenScriptFile(file, true);
                 }
                 catch (IOException) { }
+            }
+            // While the window edge is being dragged the background isn't rescaled on every step
+            // (the current frame stretches); it's redone once when you let go.
+            if (m.Msg == 0x231) Background.Sizing = true;         // WM_ENTERSIZEMOVE
+            else if (m.Msg == 0x232)                              // WM_EXITSIZEMOVE
+            {
+                Background.SizingDone();
+                if (settleTimer.Enabled) { settleTimer.Stop(); RelayoutInOnePaint(); }
             }
             base.WndProc(ref m);
         }
