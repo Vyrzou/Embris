@@ -1590,6 +1590,23 @@ class MainWindow(QMainWindow):
         self.t_autosave.toggled.connect(lambda on: self.set_setting("auto_save_recordings", bool(on)))
         g.addWidget(self.t_autosave, 1, 0, 1, 3)
         g.addWidget(label("Each take is saved as \"Recording\" with the date and time. Find them on the Presets page.", "sub", wrap=True), 2, 0, 1, 3)
+        # Frame sync: match Roblox's frame rate so every input lands on the same frame each replay.
+        g.addWidget(label("Frame sync"), 3, 0)
+        self.frame_sync_box = QComboBox()
+        self.frame_sync_rates = [0, -1, 30, 60, 75, 120, 144, 165, 240, 360]
+        hz = round(QApplication.primaryScreen().refreshRate()) if QApplication.primaryScreen() else 0
+        for r in self.frame_sync_rates:
+            self.frame_sync_box.addItem("Off" if r == 0 else ("Match my display" + (" (%d fps)" % hz if hz else "")) if r < 0 else "%d fps" % r)
+        cur = int(self.s.get("frame_sync", 0))
+        if cur not in self.frame_sync_rates:
+            self.frame_sync_rates.append(cur)
+            self.frame_sync_box.addItem("%d fps" % cur)
+        self.frame_sync_box.setCurrentIndex(self.frame_sync_rates.index(cur))
+        self.frame_sync_box.currentIndexChanged.connect(lambda i: self.set_setting("frame_sync", self.frame_sync_rates[i]))
+        self.frame_sync_box.setToolTip("Set this to Roblox's frame rate (Roblox menu > Settings > Maximum Frame Rate). "
+                                       "Playback then sends every input in the middle of a frame, so jumps land on the same frame each replay.")
+        g.addWidget(self.frame_sync_box, 3, 1)
+        g.addWidget(label("Pick the same frame rate as Roblox's Maximum Frame Rate, so each jump lands on the same frame every replay.", "sub", wrap=True), 4, 0, 1, 3)
         v.addWidget(c)
 
         c, g = self.card("Tips")
@@ -3179,12 +3196,20 @@ class MainWindow(QMainWindow):
             self.set_status("running", "Testing the sequence", "%sat %gx. Click Stop to end it." % ("%d times, " % repeat if repeat > 1 else "", speed))
         elif use:
             self.set_status("running", "Playing sequence", "%d steps%s..." % (len(steps), ", %d times" % repeat if repeat > 1 else ""))
-        args = (steps, speed, s["focus_app"], s["app_name"], repeat)
+        args = (steps, speed, s["focus_app"], s["app_name"], repeat, self.frame_ms())
         threading.Thread(target=self.play_thread, args=args, daemon=True).start()
 
-    def play_thread(self, steps, speed, focus_app, app_name, repeat=1):
+    def frame_ms(self):
+        """Frame sync's frame length in ms (0 = off)."""
+        fps = int(self.s.get("frame_sync", 0))
+        if fps < 0:
+            screen = QApplication.primaryScreen()
+            fps = screen.refreshRate() if screen and screen.refreshRate() > 1 else 60
+        return 1000.0 / fps if fps > 0 else 0.0
+
+    def play_thread(self, steps, speed, focus_app, app_name, repeat=1, frame_ms=0.0):
         try:
-            error = self.player.play(steps, speed, focus_app, app_name, repeat)
+            error = self.player.play(steps, speed, focus_app, app_name, repeat, frame_ms)
         except Exception as e:  # keep running if the OS refuses input
             error = str(e)
         self.bridge.call.emit(lambda: self.play_done(error))

@@ -13,7 +13,7 @@ import time
 
 from pynput import keyboard, mouse
 
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 IS_MAC = sys.platform == "darwin"
 
 # New versions are published as GitHub Releases.
@@ -67,10 +67,11 @@ DEFAULTS = {
     "click_hotkey": "f7", "click_interval_ms": 100.0, "click_button": 0, "click_double": False,
     "click_times": 0, "click_fixed": False, "click_x": 0, "click_y": 0,
     "snap_to_keys": True, "overlay_hotkey": "f10", "auto_save_recordings": False, "ghost_opacity": 25,
+    "frame_sync": 0,  # playback lines inputs up with the game's frames: 0 off, -1 the display's refresh rate, else that frame rate
 }
 APP_ONLY = ("hotkey", "record_hotkey", "sidebar_collapsed", "bg_file", "bg_source", "bg_dim", "pinned", "close_to_tray", "theme_name", "theme_colors",
             "click_hotkey", "click_interval_ms", "click_button", "click_double", "click_times", "click_fixed", "click_x", "click_y",
-            "snap_to_keys", "overlay_hotkey", "auto_save_recordings", "ghost_opacity")
+            "snap_to_keys", "overlay_hotkey", "auto_save_recordings", "ghost_opacity", "frame_sync")
 
 
 def load_json(path, fallback):
@@ -581,8 +582,13 @@ class Player:
             return 0
         return max(0, int((time.perf_counter() - start - self.round_start) * self.play_speed * 1000))
 
-    def play(self, steps, speed, focus_app, app_name, repeat=1):
-        """Plays the steps (repeat times). Returns None, "notfound" or an error message."""
+    def play(self, steps, speed, focus_app, app_name, repeat=1, frame_ms=0.0):
+        """Plays the steps (repeat times). Returns None, "notfound" or an error message.
+
+        frame_ms (frame sync): the game reads input once per frame, so an input sent near the edge
+        of a frame lands in the frame before or after at random. With a frame length given, every
+        input goes out in the middle of a frame, the same number of whole frames after the start as
+        in the recording, so each replay hits the same frames."""
         prev = None
         if focus_app:
             prev = front_window()
@@ -593,7 +599,9 @@ class Player:
         held_keys, held_buttons, used_mouse = set(), set(), False
         self.watcher.sending = True
         has_moves = any(st["t"] == "mv" for st in steps)
-        start, due = time.perf_counter(), 0.0
+        start, at, due = time.perf_counter(), 0.0, 0.0  # at: the recording's own time; due: when it goes out
+        frame = frame_ms / 1000.0
+        first = frame / 2  # the middle of the first frame
         # Where playback is (for the time display and the playhead): see position_ms().
         self.play_start, self.play_speed, self.round_start = start, speed, 0.0
         try:
@@ -601,8 +609,9 @@ class Player:
                 if not self.running:
                     break
                 if steps and n % len(steps) == 0:
-                    self.round_start = due
-                due += st["d"] / 1000.0 / speed
+                    self.round_start = first + at if frame > 0 else at
+                at += st["d"] / 1000.0 / speed
+                due = first + round(at / frame) * frame if frame > 0 else at
                 self.wait_until(start, due)
                 if not self.running:
                     break

@@ -1,4 +1,4 @@
-﻿// Embris - a small configurable key/click macro for Roblox (or any app).
+// Embris - a small configurable key/click macro for Roblox (or any app).
 // Build: build.bat (uses the C# compiler that ships with Windows). UI controls live in Ui.cs.
 using System;
 using System.Collections.Generic;
@@ -342,6 +342,7 @@ namespace Embris
         public int BgGlass = 1;     // see-through cards: 0 always, 1 only when the window is small, 2 never
         public bool SnapToKeys = true; // timeline: bars catch other bars' edges
         public bool AutoSaveRecordings = false; // every recording also goes into the macro suite
+        public int FrameSync = 0;   // playback lines inputs up with the game's frames: 0 off, -1 the display's refresh rate, else that frame rate
         public string BgCard = "";  // graphics card for the video ("" = Windows' default)
         public int WindowOpacity = 100; // % (lower lets you see what's behind Embris)
         public string ThemeName = "Ember";
@@ -398,7 +399,7 @@ namespace Embris
         public void Save()
         {
             var lines = MacroLines();
-            lines.AddRange(new[] { "Hotkey=" + (int)Hotkey, "RecordHotkey=" + (int)RecordHotkey, "Pinned=" + Pinned, "CloseToTray=" + CloseToTray, "SidebarCollapsed=" + SidebarCollapsed, "BgFile=" + BgFile, "BgSource=" + BgSource, "BgDim=" + BgDim, "BgDecoder=" + BgDecoder, "BgFps=" + BgFps, "BgGlass=" + BgGlass, "BgCard=" + BgCard, "SnapToKeys=" + SnapToKeys, "AutoSaveRecordings=" + AutoSaveRecordings, "WindowOpacity=" + WindowOpacity, "ThemeName=" + ThemeName, "ThemeColors=" + ThemeColors,
+            lines.AddRange(new[] { "Hotkey=" + (int)Hotkey, "RecordHotkey=" + (int)RecordHotkey, "Pinned=" + Pinned, "CloseToTray=" + CloseToTray, "SidebarCollapsed=" + SidebarCollapsed, "BgFile=" + BgFile, "BgSource=" + BgSource, "BgDim=" + BgDim, "BgDecoder=" + BgDecoder, "BgFps=" + BgFps, "BgGlass=" + BgGlass, "BgCard=" + BgCard, "SnapToKeys=" + SnapToKeys, "AutoSaveRecordings=" + AutoSaveRecordings, "FrameSync=" + FrameSync, "WindowOpacity=" + WindowOpacity, "ThemeName=" + ThemeName, "ThemeColors=" + ThemeColors,
                 "ClickHotkey=" + (int)ClickHotkey, "OverlayHotkey=" + (int)OverlayHotkey, "GhostOpacity=" + GhostOpacity, "ClickIntervalMs=" + ClickIntervalMs.ToString(Inv), "ClickButton=" + ClickButton, "ClickDouble=" + ClickDouble,
                 "ClickTimes=" + ClickTimes, "ClickFixed=" + ClickFixed, "ClickAtX=" + ClickAtX, "ClickAtY=" + ClickAtY });
             File.WriteAllLines(FilePath, lines);
@@ -451,6 +452,7 @@ namespace Embris
                 if (d.ContainsKey("BgCard")) BgCard = d["BgCard"];
                 if (d.ContainsKey("SnapToKeys")) SnapToKeys = bool.Parse(d["SnapToKeys"]);
                 if (d.ContainsKey("AutoSaveRecordings")) AutoSaveRecordings = bool.Parse(d["AutoSaveRecordings"]);
+                if (d.ContainsKey("FrameSync")) FrameSync = Math.Max(-1, Math.Min(1000, int.Parse(d["FrameSync"])));
                 if (d.ContainsKey("WindowOpacity")) WindowOpacity = Math.Max(20, Math.Min(100, int.Parse(d["WindowOpacity"])));
                 if (d.ContainsKey("ThemeName")) ThemeName = d["ThemeName"];
                 if (d.ContainsKey("ThemeColors")) ThemeColors = d["ThemeColors"];
@@ -2674,9 +2676,27 @@ namespace Embris
 
             // Recording: optionally keep every take.
             var recCard = Card(p, "Recording", 32, 278, 676, 104);
-            var autoSave = Add(recCard, new Toggle { Text = "Save each recording to my macro suite when I stop", Checked = settings.AutoSaveRecordings }, 18, 44, 640, 30);
+            var autoSave = Add(recCard, new Toggle { Text = "Save each recording to my macro suite", Checked = settings.AutoSaveRecordings }, 18, 44, 330, 30);
             autoSave.CheckedChanged += (s, e) => { settings.AutoSaveRecordings = autoSave.Checked; settings.Save(); };
-            Label(recCard, "Each take is saved as \"Recording\" with the date and time. Find them on the Presets page (and delete the ones you don't want).", 18, 74, 640);
+            tips.SetToolTip(autoSave, "Each take is saved as \"Recording\" with the date and time, on the Presets page");
+            // Frame sync: match Roblox's frame rate so every input lands on the same frame each replay.
+            Label(recCard, "Frame sync", 362, 47, 90);
+            var frameSync = Add(recCard, new Dropdown(), 452, 40, 206, 32);
+            double displayMs, displayHz;
+            long vblank;
+            bool haveDisplay = DisplayTiming(out displayMs, out vblank, out displayHz);
+            int[] rates = { 0, -1, 30, 60, 75, 120, 144, 165, 240, 360 };
+            foreach (int r in rates)
+                frameSync.Items.Add(r == 0 ? "Off" : r < 0 ? "Match my display" + (haveDisplay ? " (" + Math.Round(displayHz) + " fps)" : "") : r + " fps");
+            frameSync.SelectedIndex = Math.Max(0, Array.IndexOf(rates, settings.FrameSync));
+            if (Array.IndexOf(rates, settings.FrameSync) < 0) { frameSync.Items.Add(settings.FrameSync + " fps"); frameSync.SelectedIndex = frameSync.Items.Count - 1; }
+            frameSync.SelectedIndexChanged += (s, e) =>
+            {
+                if (frameSync.SelectedIndex < rates.Length) settings.FrameSync = rates[frameSync.SelectedIndex];
+                settings.Save();
+            };
+            tips.SetToolTip(frameSync, "Set this to Roblox's frame rate (Roblox menu > Settings > Maximum Frame Rate). Playback then sends every input in the middle of a frame, so jumps land on the same frame each replay.");
+            Label(recCard, "Frame sync: set it to Roblox's Maximum Frame Rate so jumps land on the same frame every replay.", 18, 76, 640);
 
             var tipsCard = Card(p, "Tips", 32, 396, 676, 140);
             Add(tipsCard, new TextLabel
@@ -3840,6 +3860,48 @@ namespace Embris
             }
         }
 
+        [DllImport("dwmapi.dll")] static extern int DwmGetCompositionTimingInfo(IntPtr hwnd, byte[] info);
+
+        // The display's exact refresh period and its last vertical blank, from the desktop compositor
+        // (DWM_TIMING_INFO: rateRefresh at 4, qpcRefreshPeriod at 12, qpcVBlank at 28; 292 bytes).
+        public static bool DisplayTiming(out double periodMs, out long vblankTicks, out double hz)
+        {
+            periodMs = 0; vblankTicks = 0; hz = 0;
+            var info = new byte[292];
+            BitConverter.GetBytes(292).CopyTo(info, 0);
+            try { if (DwmGetCompositionTimingInfo(IntPtr.Zero, info) != 0) return false; }
+            catch (Exception) { return false; }
+            uint num = BitConverter.ToUInt32(info, 4), den = BitConverter.ToUInt32(info, 8);
+            long period = BitConverter.ToInt64(info, 12);
+            vblankTicks = BitConverter.ToInt64(info, 28);
+            if (period <= 0 || num == 0 || den == 0) return false;
+            periodMs = period * 1000.0 / Stopwatch.Frequency;
+            hz = (double)num / den;
+            return true;
+        }
+
+        // Frame sync: the game reads input once per frame, so an input sent near the edge of a frame
+        // lands in the frame before or after at random, and a jump a frame early or late lands
+        // somewhere else. With frame sync every input goes out in the middle of a frame, the same
+        // number of whole frames after the start as in the recording, so each replay hits the same frames.
+        // Returns the frame length (0 = off) and where the first frame's middle is on the play clock.
+        static double FrameGrid(int frameSync, long clockStartTicks, out double firstMs)
+        {
+            firstMs = 0;
+            if (frameSync == 0) return 0;
+            double periodMs, hz;
+            long vblank;
+            bool display = DisplayTiming(out periodMs, out vblank, out hz);
+            // A frame rate other than the display's: its own grid, with no display timing to follow.
+            if (frameSync > 0 && (!display || Math.Abs(hz - frameSync) > 1)) return 1000.0 / frameSync;
+            if (!display) return 1000.0 / 60;
+            // The game's frames follow the display's: start in the middle of one, a little after now.
+            double vblankMs = (vblank - clockStartTicks) * 1000.0 / Stopwatch.Frequency;
+            double k = Math.Ceiling((5 - vblankMs) / periodMs);
+            firstMs = vblankMs + k * periodMs + periodMs / 2;
+            return periodMs;
+        }
+
         // Runs on a worker thread so long sequences don't freeze the window.
         void Play(IntPtr target, List<RecStep> steps, double speed, bool switchMode, int repeat)
         {
@@ -3866,17 +3928,22 @@ namespace Embris
             var proc = Process.GetCurrentProcess();
             var oldClass = proc.PriorityClass;
             try { proc.PriorityClass = ProcessPriorityClass.High; } catch (Exception) { }
+            long clockStart = Stopwatch.GetTimestamp();
             var clock = Stopwatch.StartNew();
-            double due = 0;
+            double firstFrame;
+            double frame = FrameGrid(settings.FrameSync, clockStart, out firstFrame);
+            double at = 0, due = 0; // at: the recording's own time; due: when it goes out
             playClock = clock;
             playSpeed = speed;
             for (int round = 0; round < repeat && running; round++)
             {
-                playRoundStart = due; // the time display and playhead follow this round
+                playRoundStart = frame > 0 ? firstFrame + at : at; // the time display and playhead follow this round
                 foreach (var s in steps)
                 {
                     if (!running) break;
-                    due += s.Delay / speed;
+                    at += s.Delay / speed;
+                    // Frame sync: the nearest whole frame after the start, sent mid-frame.
+                    due = frame > 0 ? firstFrame + Math.Round(at / frame) * frame : at;
                     WaitUntil(clock, due);
                     if (!running) break;
                     if (s.Kind <= 1)

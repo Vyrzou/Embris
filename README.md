@@ -6,7 +6,7 @@ with the same features.
 ## Features
 
 - **Macro**: press a key and/or click at a spot every so often, sent to the game in the background or by switching to it briefly (waits until you're idle).
-- **Recording**: record keys, clicks and camera movement and play them back 1:1. Mouse movement is kept per mouse report, so camera turns replay exactly.
+- **Recording**: record keys, clicks and camera movement and play them back 1:1. Mouse movement is kept per mouse report, so camera turns replay exactly. **Frame sync** (Hotkeys → Recording) sends every input in the middle of one of the game's frames, so jumps land on the same frame every replay.
 - **Sequence editor**: a table of steps: edit, reorder, crop, change every press of a key.
 - **Timeline editor**: a track per key; drag, stretch, select several and squish/stretch them, cut across tracks, crop between two bars, snap to keys.
 - **Undo / redo** (Ctrl+Z / Ctrl+Shift+Z), repeat count and any playback speed.
