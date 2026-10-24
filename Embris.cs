@@ -911,7 +911,7 @@ namespace Embris
 
     class MainForm : Form
     {
-        const string VFill = "vfill", AtBottom = "bottom"; // layout tags: grow with the window / stick to the bottom
+        const string VFill = "vfill", AtBottom = "bottom", Fixed = "fixed"; // layout tags: grow with the window / stick to the bottom / keep size and place
         static readonly string[] ColorNames = { "Background", "Surface", "Accent", "Text", "Border" };
         static readonly Font Mono = new Font("Consolas", 9.5f);
         // No practical limits: holds and waits run off the UI thread, so their length doesn't matter.
@@ -1188,13 +1188,13 @@ namespace Embris
                 Rectangle b;
                 if (!baseBounds.TryGetValue(c, out b)) continue;
                 int x = b.X, y = b.Y, w = b.Width, h = b.Height;
-                if (pad >= 0)
+                string tag = c.Tag as string;
+                if (pad >= 0 && tag != Fixed)
                 {
                     x = pad + (int)Math.Round((b.X - pad) * k);
                     w = pad + (int)Math.Round((b.Right - pad) * k) - x;
                 }
                 else if (parent.Role == BoxRole.Bar && (c is StatusView || c is TextLabel)) w += dW;
-                string tag = c.Tag as string;
                 if (tag == VFill) h += dH;
                 else if (tag == AtBottom) y += dH;
                 c.SetBounds(x, y, w, h);
@@ -1795,9 +1795,12 @@ namespace Embris
             p.Controls[0].Width = 340;
             e.Summary = (TextLabel)p.Controls[1];
             e.Summary.Width = 216;
-            e.Undo = Add(p, new RoundButton { Style = BtnStyle.Chip, Icon = "\uE7A7", Text = "" }, 256, 56, 36, 30);
-            e.Redo = Add(p, new RoundButton { Style = BtnStyle.Chip, Icon = "\uE7A6", Text = "" }, 296, 56, 36, 30);
-            var calibrate = Add(p, new RoundButton { Style = BtnStyle.Chip, Icon = "\uE1D2", Text = "" }, 336, 56, 36, 30);
+            e.Summary.Tag = Fixed;
+            // Icon buttons beside the title keep their size and place, so a wide window can't
+            // stretch them into the Record button.
+            e.Undo = Add(p, Tagged(new RoundButton { Style = BtnStyle.Chip, Icon = "\uE7A7", Text = "" }, Fixed), 256, 56, 36, 30);
+            e.Redo = Add(p, Tagged(new RoundButton { Style = BtnStyle.Chip, Icon = "\uE7A6", Text = "" }, Fixed), 296, 56, 36, 30);
+            var calibrate = Add(p, Tagged(new RoundButton { Style = BtnStyle.Chip, Icon = "\uE1D2", Text = "" }, Fixed), 336, 56, 36, 30);
             calibrate.Click += (s, a) => ShowCalibrationMenu(calibrate);
             tips.SetToolTip(calibrate, "Calibration: a crosshair and a ghost of your start view over the game, to line every run up the same way");
             e.Undo.Click += (s, a) => Undo();
@@ -2800,10 +2803,11 @@ namespace Embris
             tips.SetToolTip(fps, "60 is smoothest; lower uses less of your PC (while the game is in front it's 15 anyway)");
 
             var about = Card(p, "About", 32, 444, 676, 96);
+            // All three buttons share the title row; the version and update news sit underneath.
             Add(about, new TextLabel { Text = "Embris v" + Ui.Version }, 18, 44, 120, 22);
-            btnUpdate = Add(about, new RoundButton { Icon = "", Text = "Check for updates" }, 140, 38, 196, 32);
+            btnUpdate = Add(about, new RoundButton { Icon = "", Text = "Check for updates" }, 112, 10, 194, 32);
             btnUpdate.Click += (s, e) => UpdateClicked();
-            lblUpdate = Add(about, new TextLabel { Sub = true, Font = Ui.F(9f) }, 346, 44, 312, 22);
+            lblUpdate = Add(about, new TextLabel { Sub = true, Font = Ui.F(9f) }, 146, 44, 512, 22);
             tips.SetToolTip(btnUpdate, "Gets the newest Embris from " + Updater.ReleasesPage);
             Label(about, "Settings and presets are saved in " + Settings.Dir, 18, 68, 640);
             var exit = Add(about, new RoundButton { Icon = "", Text = "Exit Embris" }, 316, 10, 150, 32);
@@ -2939,9 +2943,19 @@ namespace Embris
 
             // Custom background: a picture, GIF or video from a file or a link.
             var bg = Card(p, "Background", 448, 252, 260, 284);
-            Label(bg, "Picture, GIF or video - a file or a link", 18, 46, 224);
+            // Good places for animated (video) wallpapers: download one there, then Choose file.
+            Label(bg, "Animated:", 18, 46, 64);
+            foreach (var site in new[] { new { Name = "MoeWalls", Url = "https://moewalls.com/", X = 84 }, new { Name = "MotionBGs", Url = "https://motionbgs.com", X = 164 } })
+            {
+                var url = site.Url;
+                var link = Add(bg, new RoundButton { Style = BtnStyle.Chip, Text = site.Name, Font = Ui.F(8.5f) }, site.X, 40, 78, 24);
+                link.Click += (s, e) => { try { Process.Start(url); } catch (Exception) { } };
+                tips.SetToolTip(link, "Animated wallpapers: download a video from " + url + ", then click Choose file");
+            }
             var choose = Add(bg, new RoundButton { Icon = "", Text = "Choose file" }, 18, 68, 224, 34);
             choose.Click += (s, e) => ChooseBackgroundFile();
+            choose.Top = Ui.S(70);
+            tips.SetToolTip(choose, "A picture, GIF or video from your PC");
             txtBgLink = Add(bg, new TextField { Placeholder = "Paste an image, video or page link" }, 18, 110, 224, 34);
             txtBgLink.Box.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; UseBackgroundLink(); } };
             var use = Add(bg, new RoundButton { Style = BtnStyle.Primary, Text = "Use link" }, 18, 150, 108, 34);

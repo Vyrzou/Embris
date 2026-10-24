@@ -1695,6 +1695,16 @@ class MainWindow(QMainWindow):
         # Custom background: a picture, GIF or video from a file or a link.
         c, g = self.card("Background")
         g.addWidget(label("Picture, GIF or video - a file or a link", "sub", wrap=True), 1, 0, 1, 3)
+        # Good places for animated (video) wallpapers: download one there, then Choose file.
+        sites = QHBoxLayout()
+        sites.setSpacing(8)
+        sites.addWidget(label("Animated ones:", "sub"))
+        for name, url in (("MoeWalls", "https://moewalls.com/"), ("MotionBGs", "https://motionbgs.com")):
+            b = push(name, slot=lambda _=False, u=url: QDesktopServices.openUrl(QUrl(u)))
+            b.setToolTip("Animated wallpapers: download a video from %s, then click Choose file" % url)
+            sites.addWidget(b)
+        sites.addStretch()
+        g.addLayout(sites, 7, 0, 1, 3)
         g.addWidget(push("Choose file", slot=self.choose_background_file), 2, 0, 1, 3)
         self.bg_link = QLineEdit()
         self.bg_link.setPlaceholderText("Paste an image, video or page link")
@@ -1714,7 +1724,7 @@ class MainWindow(QMainWindow):
         g.addWidget(label("%", "sub"), 5, 2)
         self.bg_status = label("", "sub", wrap=True)
         g.addWidget(self.bg_status, 6, 0, 1, 3)
-        g.setRowStretch(7, 1)
+        g.setRowStretch(8, 1)
         g.setColumnStretch(2, 1)
         row.addWidget(c, 2)
         v.addLayout(row)
