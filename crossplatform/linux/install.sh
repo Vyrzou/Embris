@@ -3,7 +3,7 @@
 set -e
 cd "$(dirname "$0")"
 
-VERSION="1.6.1"
+VERSION="1.6.2"
 DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
 DIR="$DATA/embris"
 BIN="$HOME/.local/bin"

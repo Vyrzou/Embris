@@ -123,11 +123,28 @@ namespace Embris
         {
             CloseRunningEmbris();
             Directory.CreateDirectory(InstallDir);
-            using (var src = typeof(SetupForm).Assembly.GetManifestResourceStream("Embris.exe"))
-            using (var dst = File.Create(ExePath))
-                src.CopyTo(dst);
+            Retry(() =>
+            {
+                MakeWritable(ExePath);
+                using (var src = typeof(SetupForm).Assembly.GetManifestResourceStream("Embris.exe"))
+                using (var dst = File.Create(ExePath))
+                    src.CopyTo(dst);
+            });
             if (!SamePath(Application.ExecutablePath, UninstallerPath))
-                File.Copy(Application.ExecutablePath, UninstallerPath, true);
+            {
+                // Run straight from inside a zip, this installer is a read-only file, and a copy
+                // keeps that flag. Clear it, or the next update can't replace the uninstaller.
+                try
+                {
+                    Retry(() =>
+                    {
+                        MakeWritable(UninstallerPath);
+                        File.Copy(Application.ExecutablePath, UninstallerPath, true);
+                        MakeWritable(UninstallerPath);
+                    });
+                }
+                catch (Exception) { } // an older uninstaller still uninstalls; not worth failing the install over
+            }
 
             CreateShortcut(StartMenuLink, ExePath);
             if (desktopShortcut) CreateShortcut(DesktopLink, ExePath);
@@ -181,7 +198,7 @@ namespace Embris
             {
                 File.Delete(StartMenuLink);
                 File.Delete(DesktopLink);
-                if (File.Exists(ExePath)) File.Delete(ExePath);
+                if (File.Exists(ExePath)) { MakeWritable(ExePath); File.Delete(ExePath); }
                 Registry.CurrentUser.DeleteSubKeyTree(UninstallKey, false);
                 Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\.emb", false);
                 Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\Embris.Script", false);
@@ -210,6 +227,26 @@ namespace Embris
                     if (!p.WaitForExit(3000)) { p.Kill(); p.WaitForExit(3000); }
                 }
                 catch { }
+            }
+        }
+
+        static void MakeWritable(string path)
+        {
+            if (File.Exists(path)) File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly);
+        }
+
+        // Embris may take a moment to let go of its file after closing (or antivirus may be scanning
+        // it), so keep trying for a few seconds before giving up.
+        static void Retry(Action write)
+        {
+            for (int i = 0; ; i++)
+            {
+                try { write(); return; }
+                catch (Exception ex)
+                {
+                    if (i >= 25 || !(ex is IOException || ex is UnauthorizedAccessException)) throw;
+                    System.Threading.Thread.Sleep(200);
+                }
             }
         }
 
