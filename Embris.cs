@@ -1063,7 +1063,7 @@ namespace Embris
             binds = KeyBind.ParseAll(settings.Binds);
             bindEngine.Enabled = settings.BindsOn;
             bindEngine.GameInFront = GameInFront;
-            bindEngine.PlayMacro += name => { if (IsHandleCreated) BeginInvoke((Action)(() => RunSuiteMacro(name))); };
+            bindEngine.PlayMacro += (name, cmd) => { if (IsHandleCreated) BeginInvoke((Action)(() => BindMacro(name, cmd))); };
             HandleCreated += (s, e) => bindEngine.OwnWindow = Handle;
             PushBinds();
             hotkeyHook.Binds = bindEngine;
@@ -1861,9 +1861,11 @@ namespace Embris
         EditorParts BuildEditorChrome(Box p, string recordText)
         {
             var e = new EditorParts();
-            p.Controls[0].Width = 340;
+            // The title and summary keep to the left, so they never cover the icon buttons beside them.
+            p.Controls[0].Width = Ui.S(220);
+            p.Controls[0].Tag = Fixed;
             e.Summary = (TextLabel)p.Controls[1];
-            e.Summary.Width = 216;
+            e.Summary.Width = Ui.S(216);
             e.Summary.Tag = Fixed;
             // Icon buttons beside the title keep their size and place, so a wide window can't
             // stretch them into the Record button.
@@ -1871,6 +1873,7 @@ namespace Embris
             e.Redo = Add(p, Tagged(new RoundButton { Style = BtnStyle.Chip, Icon = "\uE7A6", Text = "" }, Fixed), 296, 56, 36, 30);
             var calibrate = Add(p, Tagged(new RoundButton { Style = BtnStyle.Chip, Icon = "\uE1D2", Text = "" }, Fixed), 336, 56, 36, 30);
             calibrate.Click += (s, a) => ShowCalibrationMenu(calibrate);
+            foreach (var chip in new Control[] { e.Undo, e.Redo, calibrate }) chip.BringToFront();
             tips.SetToolTip(calibrate, "Calibration: a crosshair and a ghost of your start view over the game, to line every run up the same way");
             e.Undo.Click += (s, a) => Undo();
             e.Redo.Click += (s, a) => Redo();
@@ -2898,8 +2901,10 @@ namespace Embris
 
         void BuildKeyBindsPage()
         {
-            var p = Page(10, "Key binds", "Make keys do things: hold R to spam clicks, press F to hold the mouse down, and more.");
-            var master = Add(p, new Toggle { Text = "Key binds on", Checked = settings.BindsOn }, 560, 62, 148, 26);
+            var p = Page(10, "Key binds", "Make keys do things: hold R to spam clicks, press F to hold the mouse down, or play a preset.");
+            var listCard = Tagged(Card(p, "Your binds", 32, 100, 300, 436), VFill);
+            // All binds on/off, in the list's title row.
+            var master = Add(listCard, new Toggle { Text = "All on", Checked = settings.BindsOn, Font = Ui.F(9f) }, 182, 12, 100, 26);
             master.CheckedChanged += (s, e) =>
             {
                 settings.BindsOn = bindEngine.Enabled = master.Checked;
@@ -2908,7 +2913,6 @@ namespace Embris
             };
             tips.SetToolTip(master, "Turn all key binds on or off");
 
-            var listCard = Tagged(Card(p, "Your binds", 32, 100, 300, 436), VFill);
             bindList = Add(listCard, Tagged(new ItemList { EmptyText = "No key binds yet. Click Add bind." }, VFill), 18, 46, 264, 318);
             bindList.SelectedIndexChanged += (s, e) => LoadBind();
             var add = Add(listCard, Tagged(new RoundButton { Style = BtnStyle.Primary, Icon = "", Text = "Add bind" }, AtBottom), 18, 380, 128, 38);
@@ -2954,7 +2958,16 @@ namespace Embris
             Label(ed, "Do", 18, 175, 110);
             bindAction = Add(ed, new Dropdown(), 130, 168, 216, 34);
             foreach (var n in KeyBind.ActionNames) bindAction.Items.Add(n);
-            bindAction.SelectedIndexChanged += (s, e) => { if (bindAction.SelectedIndex >= 0) EditBind(b => b.Action = (BindAction)bindAction.SelectedIndex); };
+            bindAction.SelectedIndexChanged += (s, e) =>
+            {
+                if (bindAction.SelectedIndex < 0) return;
+                EditBind(b =>
+                {
+                    b.Action = KeyBind.ActionOrder[bindAction.SelectedIndex];
+                    // Playing a preset: start with the first one in the suite.
+                    if (b.Action == BindAction.PlayMacro && b.Macro == "" && presets.Count > 0) b.Macro = presets[0].Name;
+                });
+            };
             bindKeyLabel = Label(ed, "Key", 18, 217, 110);
             bindKey = Add(ed, new KeyBox { Key = Keys.E }, 130, 210, 216, 34);
             bindKey.KeyChanged += (s, e) => EditBind(b => b.Key = bindKey.Key);
@@ -3039,7 +3052,7 @@ namespace Embris
             bindOn.Checked = b.On;
             bindTrigger.Key = b.Trigger;
             bindMode.SelectedIndex = (int)b.Mode;
-            bindAction.SelectedIndex = (int)b.Action;
+            bindAction.SelectedIndex = Array.IndexOf(KeyBind.ActionOrder, b.Action);
             bindKey.Key = b.Key;
             bindEvery.Value = (decimal)Math.Max(1, Math.Min(3600000, b.EveryMs));
             bindBlock.Checked = b.Block;
@@ -3050,7 +3063,6 @@ namespace Embris
             bindMacroLabel.Visible = bindMacro.Visible = macro;
             if (macro) FillBindMacros();
             bindEveryLabel.Visible = bindEvery.Visible = bindEveryUnit.Visible = bindRate.Visible = b.IsSpam && b.Mode != BindMode.Once;
-            bindMode.Enabled = !macro;
             bindRate.Text = b.EveryMs > 0 ? (1000 / b.EveryMs).ToString(b.EveryMs >= 100 ? "0.#" : "0") + "/s" : "";
             bindSummary.Text = b.Describe();
             loadingBind = false;
@@ -3687,8 +3699,16 @@ namespace Embris
         // A macro's own hotkey: load and start it, or stop it if it's the one running.
         void OnSuiteKey(int key) { RunSuiteIndex(presets.FindIndex(p => (int)p.Hotkey == key)); }
 
-        // A key bind that plays a macro from the suite (same as its hotkey).
-        void RunSuiteMacro(string name) { RunSuiteIndex(presets.FindIndex(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase))); }
+        // A key bind that plays a preset or recording from the suite: start it, stop it, or either.
+        void BindMacro(string name, MacroCommand cmd)
+        {
+            int i = presets.FindIndex(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (i < 0) { SetStatus(StatusKind.Problem, "\"" + name + "\" isn't in your suite", "Pick another preset for that key bind."); return; }
+            bool runningThis = running && suitePreset == i;
+            if (cmd == MacroCommand.Stop) { if (runningThis) Stop(); return; }
+            if (cmd == MacroCommand.Start && runningThis) return;
+            RunSuiteIndex(i); // starts it (or stops it, for a toggle press while it runs)
+        }
 
         void RunSuiteIndex(int i)
         {

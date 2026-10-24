@@ -724,7 +724,7 @@ class MainWindow(QMainWindow):
         self.bind_engine.enabled = bool(self.s.get("binds_on", True))
         self.bind_engine.own_focused = lambda: self.watcher.own_focused
         self.bind_engine.game_in_front = self.game_in_front
-        self.bind_engine.on_macro = lambda name: self.bridge.call.emit(lambda: self.run_suite_macro(name))
+        self.bind_engine.on_macro = lambda name, command: self.bridge.call.emit(lambda: self.bind_macro(name, command))
         self.bind_engine.set_binds(list(self.s.get("binds") or []))
         self.watcher.binds = self.bind_engine
         self.front_cache = (0.0, False)
@@ -1987,7 +1987,7 @@ class MainWindow(QMainWindow):
         g.addWidget(label("Do", "sub"), 4, 0)
         self.b_action = QComboBox()
         self.b_action.addItems(core.BIND_ACTION_NAMES)
-        self.b_action.currentIndexChanged.connect(lambda i: i >= 0 and self.edit_bind(lambda b: b.update(action=core.BIND_ACTIONS[i])))
+        self.b_action.currentIndexChanged.connect(lambda i: i >= 0 and self.edit_bind(lambda b: self.set_bind_action(b, core.BIND_ACTIONS[i])))
         g.addWidget(self.b_action, 4, 1)
         self.b_out_label = label("Key", "sub")
         g.addWidget(self.b_out_label, 5, 0)
@@ -2035,6 +2035,11 @@ class MainWindow(QMainWindow):
         if not on:
             self.bind_engine.stop_all()
         self.set_setting("binds_on", bool(on))
+
+    def set_bind_action(self, b, action):
+        b["action"] = action
+        if action == "macro" and not b.get("macro") and self.presets:
+            b["macro"] = self.presets[0].get("name", "")  # start with the first one in the suite
 
     def is_hotkey(self, key):
         s = self.s
@@ -2125,7 +2130,6 @@ class MainWindow(QMainWindow):
             self.b_macro.setCurrentIndex(next((n for n, p in enumerate(self.presets) if p.get("name", "").lower() == b.get("macro", "").lower()), -1))
         for w in (self.b_every_label, self.b_every):
             w.setVisible(core.bind_is_spam(b) and b["mode"] != "once")
-        self.b_mode.setEnabled(not macro)
         self.b_summary.setText(core.bind_describe(b))
         self.loading_bind = False
 
@@ -2737,9 +2741,20 @@ class MainWindow(QMainWindow):
     def on_suite_key(self, key):
         self.run_suite_index(next((n for n, p in enumerate(self.presets) if p.get("hotkey") == key), -1))
 
-    def run_suite_macro(self, name):
-        """A key bind that plays a macro from the suite (same as its hotkey)."""
-        self.run_suite_index(next((n for n, p in enumerate(self.presets) if p.get("name", "").lower() == name.lower()), -1))
+    def bind_macro(self, name, command):
+        """A key bind that plays a preset or recording from the suite: "start", "stop" or "toggle" it."""
+        i = next((n for n, p in enumerate(self.presets) if p.get("name", "").lower() == name.lower()), -1)
+        if i < 0:
+            self.set_status("problem", '"%s" isn\'t in your suite' % name, "Pick another preset for that key bind.")
+            return
+        running_this = self.running and self.suite_preset == i
+        if command == "stop":
+            if running_this:
+                self.stop()
+            return
+        if command == "start" and running_this:
+            return
+        self.run_suite_index(i)  # starts it (or stops it, for a toggle press while it runs)
 
     def run_suite_index(self, i):
         if i < 0 or self.recording:

@@ -670,9 +670,9 @@ class Player:
 
 BIND_MODES = ("held", "toggle", "once")
 BIND_MODE_NAMES = ("While held", "Toggle: press to start, again to stop", "Once per press")
-BIND_ACTIONS = ("spam_left", "spam_right", "hold_left", "hold_right", "spam_key", "hold_key", "macro")
-BIND_ACTION_NAMES = ("Spam left click", "Spam right click", "Hold left click", "Hold right click", "Spam a key",
-                     "Hold a key", "Play a macro from my suite")
+BIND_ACTIONS = ("macro", "spam_left", "spam_right", "hold_left", "hold_right", "spam_key", "hold_key")  # as listed: presets first
+BIND_ACTION_NAMES = ("Play a preset or recording", "Spam left click", "Spam right click", "Hold left click", "Hold right click",
+                     "Spam a key", "Hold a key")
 
 
 def new_bind(key="r"):
@@ -698,10 +698,10 @@ def _bind_target(b):
 def bind_title(b):
     """"R:  spam left click while held\""""
     if b["action"] == "macro":
-        what, when = "play " + _bind_target(b), ""
+        what = "play " + (_bind_target(b) if b.get("macro") else "a preset")
     else:
         what = ("spam " if bind_is_spam(b) else "tap " if b["mode"] == "once" else "hold ") + _bind_target(b)
-        when = " while held" if b["mode"] == "held" else " (toggle)" if b["mode"] == "toggle" else ""
+    when = " while held" if b["mode"] == "held" else " (toggle)" if b["mode"] == "toggle" else ""
     return ("" if b.get("on", True) else "(off) ") + key_label(b["key"]) + ":  " + what + when
 
 
@@ -709,7 +709,14 @@ def bind_describe(b):
     """A sentence for the editor: what pressing the key does."""
     key = key_label(b["key"])
     if b["action"] == "macro":
-        return ('Pressing %s starts "%s"; pressing it again stops it.' % (key, b["macro"])) if b.get("macro") else "Pick a macro from your suite."
+        m = b.get("macro")
+        if not m:
+            return "Pick a preset or recording from your suite (save them on the Presets page)."
+        if b["mode"] == "held":
+            return 'Holding %s plays "%s"; letting go stops it.' % (key, m)
+        if b["mode"] == "toggle":
+            return 'Pressing %s starts "%s". Press it again to stop.' % (key, m)
+        return 'Each press of %s starts "%s" (it runs as set up on the Presets page).' % (key, m)
     every = float(b.get("every", 50))
     rate = " %s times a second" % (("%.1f" % (1000 / every)).rstrip("0").rstrip(".") if every >= 100 else "%d" % round(1000 / max(every, 1)))
     spam = bind_is_spam(b)
@@ -730,7 +737,7 @@ class BindEngine:
         self.enabled = True
         self.game_in_front = lambda: True
         self.own_focused = lambda: False
-        self.on_macro = lambda name: None  # called on the listener thread
+        self.on_macro = lambda name, command: None  # called on the listener thread; command: "start", "stop" or "toggle"
         self.kb = keyboard.Controller()
         self.ms = mouse.Controller()
         self.running = {}        # id(bind) -> stop function
@@ -755,8 +762,14 @@ class BindEngine:
         if not down:
             self.down.discard(name)
             for b in binds:
-                if b["mode"] == "held" and b["action"] != "macro":
+                if b["mode"] != "held":
+                    continue
+                if b["action"] != "macro":
                     self._stop(b)
+                elif b.get("macro") and self.is_running(b):
+                    with self.lock:
+                        self.running.pop(id(b), None)
+                    self.on_macro(b["macro"], "stop")
             return
         repeat = name in self.down
         self.down.add(name)
@@ -767,7 +780,12 @@ class BindEngine:
                 continue
             if b["action"] == "macro":
                 if b.get("macro"):
-                    self.on_macro(b["macro"])
+                    if b["mode"] == "held":
+                        with self.lock:
+                            self.running[id(b)] = lambda: None
+                        self.on_macro(b["macro"], "start")
+                    else:
+                        self.on_macro(b["macro"], "toggle" if b["mode"] == "toggle" else "start")
             elif b["mode"] == "held":
                 self._start(b)
             elif b["mode"] == "toggle":

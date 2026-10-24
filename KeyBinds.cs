@@ -13,6 +13,7 @@ namespace Embris
 {
     enum BindMode { Held, Toggle, Once }
     enum BindAction { SpamLeft, SpamRight, HoldLeft, HoldRight, SpamKey, HoldKey, PlayMacro }
+    enum MacroCommand { Start, Stop, Toggle }
 
     class KeyBind
     {
@@ -27,7 +28,9 @@ namespace Embris
         public string Macro = "";       // for PlayMacro: a macro in the suite
 
         public static readonly string[] ModeNames = { "While held", "Toggle: press to start, again to stop", "Once per press" };
-        public static readonly string[] ActionNames = { "Spam left click", "Spam right click", "Hold left click", "Hold right click", "Spam a key", "Hold a key", "Play a macro from my suite" };
+        // The "Do" list, in the order it's shown (presets first); the numbers saved stay the BindAction values.
+        public static readonly BindAction[] ActionOrder = { BindAction.PlayMacro, BindAction.SpamLeft, BindAction.SpamRight, BindAction.HoldLeft, BindAction.HoldRight, BindAction.SpamKey, BindAction.HoldKey };
+        public static readonly string[] ActionNames = { "Play a preset or recording", "Spam left click", "Spam right click", "Hold left click", "Hold right click", "Spam a key", "Hold a key" };
 
         public KeyBind Copy() { return (KeyBind)MemberwiseClone(); }
 
@@ -53,9 +56,9 @@ namespace Embris
         {
             get
             {
-                string what = Action == BindAction.PlayMacro ? "play " + Target
+                string what = Action == BindAction.PlayMacro ? "play " + (Macro == "" ? "a preset" : Target)
                     : (IsSpam ? "spam " : Mode == BindMode.Once ? "tap " : "hold ") + Target;
-                string when = Action == BindAction.PlayMacro ? "" : Mode == BindMode.Held ? " while held" : Mode == BindMode.Toggle ? " (toggle)" : "";
+                string when = Mode == BindMode.Held ? " while held" : Mode == BindMode.Toggle ? " (toggle)" : "";
                 return (On ? "" : "(off) ") + Ui.KeyName(Trigger) + ":  " + what + when;
             }
         }
@@ -65,7 +68,12 @@ namespace Embris
         {
             string key = Ui.KeyName(Trigger);
             if (Action == BindAction.PlayMacro)
-                return Macro == "" ? "Pick a macro from your suite." : "Pressing " + key + " starts \"" + Macro + "\"; pressing it again stops it.";
+            {
+                if (Macro == "") return "Pick a preset or recording from your suite (save them on the Presets page).";
+                if (Mode == BindMode.Held) return "Holding " + key + " plays \"" + Macro + "\"; letting go stops it.";
+                if (Mode == BindMode.Toggle) return "Pressing " + key + " starts \"" + Macro + "\". Press it again to stop.";
+                return "Each press of " + key + " starts \"" + Macro + "\" (it runs as set up on the Presets page).";
+            }
             string rate = IsSpam ? " " + (EveryMs > 0 ? (1000 / EveryMs).ToString(EveryMs >= 100 ? "0.#" : "0", CultureInfo.InvariantCulture) : "1000+") + " times a second" : "";
             string act = IsSpam ? "spams " + Target + rate : Mode == BindMode.Once ? "taps " + Target : "holds " + Target + " down";
             switch (Mode)
@@ -128,7 +136,7 @@ namespace Embris
         public volatile bool Enabled = true;
         public IntPtr OwnWindow;              // binds don't fire while Embris itself is in front
         public Func<bool> GameInFront;        // for "only while the game is in front"
-        public event Action<string> PlayMacro; // raised on the hook thread with the macro's name
+        public event Action<string, MacroCommand> PlayMacro; // raised on the hook thread with the preset's name
 
         readonly Dictionary<KeyBind, Action> stops = new Dictionary<KeyBind, Action>(); // running actions
         readonly HashSet<int> keysDown = new HashSet<int>();
@@ -147,7 +155,11 @@ namespace Embris
                 keysDown.Remove(key);
                 // Letting go always ends a held action, even if the game is no longer in front.
                 foreach (var b in binds)
-                    if ((int)b.Trigger == key && b.Mode == BindMode.Held && b.Action != BindAction.PlayMacro) Stop(b);
+                {
+                    if ((int)b.Trigger != key || b.Mode != BindMode.Held) continue;
+                    if (b.Action != BindAction.PlayMacro) Stop(b);
+                    else if (PlayMacro != null && b.Macro != "" && stopsContains(b)) { lock (stops) stops.Remove(b); PlayMacro(b.Macro, MacroCommand.Stop); }
+                }
                 // The release is kept from the game only if the press was (or the key would stick).
                 return swallowed.Remove(key);
             }
@@ -160,7 +172,13 @@ namespace Embris
                 if (b.OnlyInGame && GameInFront != null && !GameInFront()) continue;
                 block |= b.Block;
                 if (repeat) continue; // Windows repeats a held key: only the first press counts
-                if (b.Action == BindAction.PlayMacro) { if (PlayMacro != null && b.Macro != "") PlayMacro(b.Macro); continue; }
+                if (b.Action == BindAction.PlayMacro)
+                {
+                    if (PlayMacro == null || b.Macro == "") continue;
+                    if (b.Mode == BindMode.Held) { lock (stops) stops[b] = () => { }; PlayMacro(b.Macro, MacroCommand.Start); }
+                    else PlayMacro(b.Macro, b.Mode == BindMode.Toggle ? MacroCommand.Toggle : MacroCommand.Start);
+                    continue;
+                }
                 switch (b.Mode)
                 {
                     case BindMode.Held: Start(b); break;
