@@ -326,6 +326,8 @@ namespace Embris
         public Keys ClickHotkey = Keys.F7;
         public Keys OverlayHotkey = Keys.F10; // shows / hides the calibration overlay
         public int GhostOpacity = 25;         // % : how visible the start-view ghost is
+        public bool CustomCursor = false;     // calibration overlay: show the uploaded cursor instead of the crosshair
+        public int CursorSize = 32;           // its size in pixels
         public decimal ClickIntervalMs = 100;
         public int ClickButton = 0;          // 0 left, 1 right, 2 middle
         public bool ClickDouble = false;
@@ -400,7 +402,7 @@ namespace Embris
         {
             var lines = MacroLines();
             lines.AddRange(new[] { "Hotkey=" + (int)Hotkey, "RecordHotkey=" + (int)RecordHotkey, "Pinned=" + Pinned, "CloseToTray=" + CloseToTray, "SidebarCollapsed=" + SidebarCollapsed, "BgFile=" + BgFile, "BgSource=" + BgSource, "BgDim=" + BgDim, "BgDecoder=" + BgDecoder, "BgFps=" + BgFps, "BgGlass=" + BgGlass, "BgCard=" + BgCard, "SnapToKeys=" + SnapToKeys, "AutoSaveRecordings=" + AutoSaveRecordings, "FrameSync=" + FrameSync, "WindowOpacity=" + WindowOpacity, "ThemeName=" + ThemeName, "ThemeColors=" + ThemeColors,
-                "ClickHotkey=" + (int)ClickHotkey, "OverlayHotkey=" + (int)OverlayHotkey, "GhostOpacity=" + GhostOpacity, "ClickIntervalMs=" + ClickIntervalMs.ToString(Inv), "ClickButton=" + ClickButton, "ClickDouble=" + ClickDouble,
+                "ClickHotkey=" + (int)ClickHotkey, "OverlayHotkey=" + (int)OverlayHotkey, "GhostOpacity=" + GhostOpacity, "CustomCursor=" + CustomCursor, "CursorSize=" + CursorSize, "ClickIntervalMs=" + ClickIntervalMs.ToString(Inv), "ClickButton=" + ClickButton, "ClickDouble=" + ClickDouble,
                 "ClickTimes=" + ClickTimes, "ClickFixed=" + ClickFixed, "ClickAtX=" + ClickAtX, "ClickAtY=" + ClickAtY });
             File.WriteAllLines(FilePath, lines);
         }
@@ -459,6 +461,8 @@ namespace Embris
                 if (d.ContainsKey("ClickHotkey")) ClickHotkey = (Keys)int.Parse(d["ClickHotkey"]);
                 if (d.ContainsKey("OverlayHotkey")) OverlayHotkey = (Keys)int.Parse(d["OverlayHotkey"]);
                 if (d.ContainsKey("GhostOpacity")) GhostOpacity = Math.Max(0, Math.Min(100, int.Parse(d["GhostOpacity"])));
+                if (d.ContainsKey("CustomCursor")) CustomCursor = bool.Parse(d["CustomCursor"]);
+                if (d.ContainsKey("CursorSize")) CursorSize = Math.Max(4, Math.Min(512, int.Parse(d["CursorSize"])));
                 if (d.ContainsKey("ClickIntervalMs")) ClickIntervalMs = Math.Max(0, decimal.Parse(d["ClickIntervalMs"], Inv));
                 if (d.ContainsKey("ClickButton")) ClickButton = Math.Max(0, Math.Min(2, int.Parse(d["ClickButton"])));
                 if (d.ContainsKey("ClickDouble")) ClickDouble = bool.Parse(d["ClickDouble"]);
@@ -937,10 +941,10 @@ namespace Embris
         NumberBox pickX, pickY;
         Action pickDone;
 
-        Box[] pages = new Box[9];
-        NavButton[] navs = new NavButton[9];
-        // Sidebar order (page numbers): the auto clicker sits right under Macro.
-        static readonly int[] NavOrder = { 0, 8, 1, 2, 3, 4, 5, 6, 7 };
+        Box[] pages = new Box[10];
+        NavButton[] navs = new NavButton[10];
+        // Sidebar order (page numbers): the auto clicker sits right under Macro, calibration after the editors.
+        static readonly int[] NavOrder = { 0, 8, 1, 2, 3, 9, 4, 5, 6, 7 };
         Box cardTarget, cardTiming, cardKey, cardClick, cardHotkey, cardSaved, cardBuilder;
         Box[] stepPanels = new Box[3];
         Dropdown cboTarget, cboMode;
@@ -989,6 +993,7 @@ namespace Embris
             BuildSettingsPage();
             BuildThemePage();
             BuildAutoClickerPage();
+            BuildCalibrationPage();
             BuildMini();
 
             actionTimer.Tick += (s, e) => DoAction();
@@ -1214,8 +1219,8 @@ namespace Embris
             btnPin = Add(side, new RoundButton { Style = BtnStyle.Chip, PinIcon = true, Text = "" }, 172, 24, 34, 32);
             btnPin.Click += (s, e) => { settings.Pinned = !settings.Pinned; settings.Save(); ApplyPin(); };
 
-            string[] names = { "Macro", "Presets", "Sequence editor", "Timeline editor", "Scripts", "Hotkeys", "Settings", "Themes & Colors", "Auto clicker" };
-            string[] icons = { "\uE8FD", "\uE8F1", "\uE179", "\uE7C4", "\uE943", "\uE765", "\uE713", "\uE790", "\uE962" };
+            string[] names = { "Macro", "Presets", "Sequence editor", "Timeline editor", "Scripts", "Hotkeys", "Settings", "Themes & Colors", "Auto clicker", "Calibration" };
+            string[] icons = { "\uE8FD", "\uE8F1", "\uE179", "\uE7C4", "\uE943", "\uE765", "\uE713", "\uE790", "\uE962", "\uE1D2" };
             for (int i = 0; i < names.Length; i++)
             {
                 int n = i;
@@ -1497,22 +1502,8 @@ namespace Embris
             // Calibration overlay: crosshair + ghost of the start view over the game.
             calibrationToggle = Add(cardTiming, new Toggle { Text = "Calibration (" + Ui.KeyName(settings.OverlayHotkey) + ")" }, 18, 122, 150, 30);
             // How see-through the ghost of the start view is.
-            var ghost = Add(cardTiming, new Slider { Value = settings.GhostOpacity / 100.0 }, 172, 122, 100, 30);
-            var ghostText = Add(cardTiming, new TextLabel { Text = settings.GhostOpacity + "%", Sub = true, Font = Ui.F(9f) }, 274, 122, 40, 30);
-            ghost.ValueChanged += (s, e) =>
-            {
-                settings.GhostOpacity = (int)Math.Round(ghost.Value * 100);
-                ghostText.Text = settings.GhostOpacity + "%";
-                if (overlay != null) overlay.GhostOpacity = settings.GhostOpacity / 100f;
-            };
-            ghost.MouseUp += (s, e) => settings.Save();
-            tips.SetToolTip(ghost, "How visible the ghost of your start view is (lower = more see-through)");
-            calibrationToggle.CheckedChanged += (s, e) =>
-            {
-                bool shown = overlay != null && overlay.Visible;
-                if (calibrationToggle.Checked != shown) ToggleOverlay();
-            };
-            tips.SetToolTip(calibrationToggle, "Shows a crosshair and a faded ghost of your start view over the game, to line every run up the same way");
+            GhostSlider(cardTiming, 172, 122, 100);
+            WireCalibrationToggle(calibrationToggle);
 
             cardKey = Card(p, "Key press", 378, 100, 330, 166);
             chkKey = Add(cardKey, new Toggle { Text = "Press a key", Checked = settings.PressKey }, 18, 46, 200, 30);
@@ -1935,8 +1926,11 @@ namespace Embris
             edX.ValueChanged += (s, e) => EditRow(r => SeqModel.SetPosition(sequence, r, (int)edX.Value, (int)edY.Value));
             edY.ValueChanged += (s, e) => EditRow(r => SeqModel.SetPosition(sequence, r, (int)edX.Value, (int)edY.Value));
 
-            Add(propsCard, new TextLabel { Text = "Keyboard preview", Font = Ui.Semi(10f) }, 18, 256, 228, 22);
+            Add(propsCard, new TextLabel { Text = "Keyboard", Font = Ui.Semi(10f) }, 18, 256, 80, 22);
+            Add(propsCard, new TextLabel { Text = "click a key to add it", Sub = true, Font = Ui.F(8.5f) }, 96, 258, 150, 20);
             keyboard = Add(propsCard, Tagged(new KeyboardPreview(), VFill), 18, 282, 228, 80);
+            keyboard.KeyClicked += k => AddStepRow(RowType.KeyPress, k);
+            tips.SetToolTip(keyboard, "Click a key to add a press of it after the selected step");
         }
 
         // The one selected row (null when none or several are selected).
@@ -2052,10 +2046,10 @@ namespace Embris
             else EditRow(x => SeqModel.SetKey(sequence, x, key));
         }
 
-        void AddStepRow(RowType type)
+        void AddStepRow(RowType type, Keys key = Keys.None)
         {
             int at = stepTable.SelectionEnd >= 0 && stepTable.SelectionEnd < tableRows.Count ? seqRows[tableRows[stepTable.SelectionEnd]].Last + 1 : sequence.Count;
-            var key = edKey.Key == Keys.None ? Keys.E : edKey.Key;
+            if (key == Keys.None) key = edKey.Key == Keys.None ? Keys.E : edKey.Key;
             int hold = type == RowType.Delay ? 250 : type == RowType.Click ? 40 : 50;
             var steps = SeqModel.Make(type, key, false, RecStep.NoPosition, RecStep.NoPosition, hold);
             SeqModel.Insert(sequence, at, steps);
@@ -2595,12 +2589,68 @@ namespace Embris
         }
 
         Toggle calibrationToggle;
+        // The calibration controls appear on the Macro page and the Calibration page; these keep them in step.
+        readonly List<Toggle> calibrationToggles = new List<Toggle>();
+        readonly List<KeyValuePair<Slider, TextLabel>> ghostSliders = new List<KeyValuePair<Slider, TextLabel>>();
+
+        void WireCalibrationToggle(Toggle toggle)
+        {
+            calibrationToggles.Add(toggle);
+            toggle.CheckedChanged += (s, e) =>
+            {
+                bool shown = overlay != null && overlay.Visible;
+                if (toggle.Checked != shown) ToggleOverlay();
+            };
+            tips.SetToolTip(toggle, "Shows a crosshair and a faded ghost of your start view over the game, to line every run up the same way");
+        }
+
+        // How see-through the ghost of the start view is: a slider and its % label.
+        void GhostSlider(Control parent, int x, int y, int w)
+        {
+            var ghost = Add(parent, new Slider { Value = settings.GhostOpacity / 100.0 }, x, y, w, 30);
+            var text = Add(parent, new TextLabel { Text = settings.GhostOpacity + "%", Sub = true, Font = Ui.F(9f) }, x + w + 2, y, 40, 30);
+            ghostSliders.Add(new KeyValuePair<Slider, TextLabel>(ghost, text));
+            ghost.ValueChanged += (s, e) =>
+            {
+                int v = (int)Math.Round(ghost.Value * 100);
+                if (v == settings.GhostOpacity) return;
+                settings.GhostOpacity = v;
+                foreach (var pair in ghostSliders)
+                {
+                    if (pair.Key != ghost) pair.Key.Value = v / 100.0;
+                    pair.Value.Text = v + "%";
+                }
+                if (overlay != null) overlay.GhostOpacity = v / 100f;
+            };
+            ghost.MouseUp += (s, e) => settings.Save();
+            tips.SetToolTip(ghost, "How visible the ghost of your start view is (lower = more see-through)");
+        }
 
         void ToggleOverlay()
         {
             ToggleOverlayCore();
             bool shown = overlay != null && overlay.Visible;
-            if (calibrationToggle != null && calibrationToggle.Checked != shown) calibrationToggle.Checked = shown;
+            foreach (var toggle in calibrationToggles) if (toggle.Checked != shown) toggle.Checked = shown;
+        }
+
+        static string CustomCursorFile { get { return Path.Combine(Settings.Dir, "custom-cursor.png"); } }
+        Bitmap customCursor; // loaded from CustomCursorFile
+
+        Bitmap CustomCursorImage()
+        {
+            if (customCursor == null && File.Exists(CustomCursorFile))
+                try { customCursor = CalibrationOverlay.LoadCursorImage(CustomCursorFile); } catch (Exception) { }
+            return customCursor;
+        }
+
+        // Shows the current crosshair settings on the overlay, if it's up.
+        void ApplyCursor()
+        {
+            if (cursorPreview != null) cursorPreview.Invalidate();
+            if (overlay == null) return;
+            overlay.CustomCursor = settings.CustomCursor ? CustomCursorImage() : null;
+            overlay.CursorSize = settings.CursorSize;
+            if (overlay.Visible) overlay.Redraw();
         }
 
         void ToggleOverlayCore()
@@ -2608,6 +2658,8 @@ namespace Embris
             if (overlay != null && overlay.Visible) { overlay.Hide(); return; }
             if (overlay == null) overlay = new CalibrationOverlay();
             overlay.GhostOpacity = settings.GhostOpacity / 100f;
+            overlay.CustomCursor = settings.CustomCursor ? CustomCursorImage() : null;
+            overlay.CursorSize = settings.CursorSize;
             IntPtr game = FindTarget();
             bool ghost = File.Exists(StartViewFile);
             overlay.ShowOver(ViewArea(game), ghost ? StartViewFile : null,
@@ -2632,6 +2684,92 @@ namespace Embris
                 if (ok && overlay != null && overlay.Visible) { overlay.Hide(); ToggleOverlay(); }
             };
             t.Start();
+        }
+
+        CursorPreview cursorPreview;
+        Toggle overlayPageToggle;
+
+        void BuildCalibrationPage()
+        {
+            var p = Page(9, "Calibration", "Start every run from the same spot: a crosshair and a ghost of your start view over the game.");
+
+            var ov = Card(p, "Overlay", 32, 100, 676, 158);
+            overlayPageToggle = Add(ov, new Toggle { Text = "Show the overlay (" + Ui.KeyName(settings.OverlayHotkey) + ")" }, 18, 44, 270, 30);
+            WireCalibrationToggle(overlayPageToggle);
+            Label(ov, "Ghost of the start view", 300, 50, 150);
+            GhostSlider(ov, 452, 44, 160);
+            var retake = Add(ov, new RoundButton { Icon = "", Text = "Retake start view in 3 s" }, 18, 84, 240, 34);
+            retake.Click += (s, e) => RetakeStartView();
+            tips.SetToolTip(retake, "Switch to the game and aim where your run starts; the view is captured after 3 seconds");
+            Label(ov, "It's also saved each time you start recording.", 270, 93, 390);
+            Label(ov, "Before playing, line the game up with the ghost, then press " + Ui.KeyName(settings.Hotkey) + " to run.", 18, 128, 640);
+
+            var ch = Card(p, "Crosshair", 32, 272, 676, 264);
+            cursorPreview = Add(ch, new CursorPreview { GetImage = () => settings.CustomCursor ? CustomCursorImage() : null, GetSize = () => settings.CursorSize }, 18, 44, 200, 200);
+            Label(ch, "Show", 240, 51, 56);
+            var style = Add(ch, new Dropdown(), 300, 44, 240, 34);
+            style.Items.Add("Built-in crosshair");
+            style.Items.Add("My cursor image");
+            var upload = Add(ch, new RoundButton { Style = BtnStyle.Primary, Icon = "", Text = "Upload cursor" }, 240, 90, 180, 34);
+            var remove = Add(ch, new RoundButton { Text = "Remove" }, 428, 90, 112, 34);
+            Label(ch, "Size", 240, 141, 56);
+            var size = Num(ch, 4, 512, 0, 2, settings.CursorSize, 300, 134, 110);
+            Label(ch, "px", 416, 141, 30);
+            var note = Add(ch, new TextLabel { Sub = true, Wrap = true, Font = Ui.F(9f) }, 240, 182, 418, 62);
+            Action sync = () =>
+            {
+                bool have = File.Exists(CustomCursorFile);
+                if (!have) settings.CustomCursor = false;
+                style.SelectedIndex = settings.CustomCursor ? 1 : 0;
+                remove.Enabled = have;
+                note.TextColor = null;
+                note.Text = have ? "Your cursor is drawn at the centre of the game view, on top of the ghost."
+                                 : "Upload a .png, .cur or .ico (a PNG with a see-through background works best). It's drawn at the centre of the game view.";
+                ApplyCursor();
+            };
+            style.SelectedIndexChanged += (s, e) =>
+            {
+                bool custom = style.SelectedIndex == 1;
+                if (custom && !File.Exists(CustomCursorFile)) { style.SelectedIndex = 0; UploadCursor(sync, note); return; }
+                if (custom == settings.CustomCursor) return;
+                settings.CustomCursor = custom;
+                settings.Save();
+                ApplyCursor();
+            };
+            upload.Click += (s, e) => UploadCursor(sync, note);
+            remove.Click += (s, e) =>
+            {
+                if (customCursor != null) { customCursor.Dispose(); customCursor = null; }
+                try { File.Delete(CustomCursorFile); } catch (IOException) { }
+                settings.CustomCursor = false;
+                settings.Save();
+                sync();
+            };
+            size.ValueChanged += (s, e) => { settings.CursorSize = (int)size.Value; settings.Save(); ApplyCursor(); };
+            tips.SetToolTip(size, "How big your cursor image is drawn, in pixels");
+            sync();
+        }
+
+        // Copies a cursor or picture into Embris's folder (as PNG) and switches the overlay to it.
+        void UploadCursor(Action sync, TextLabel note)
+        {
+            using (var dlg = new OpenFileDialog { Title = "Choose a cursor", Filter = "Cursors and pictures|*.png;*.cur;*.ico;*.gif;*.jpg;*.jpeg;*.bmp;*.webp|All files|*.*" })
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                try
+                {
+                    using (var img = CalibrationOverlay.LoadCursorImage(dlg.FileName)) img.Save(CustomCursorFile, System.Drawing.Imaging.ImageFormat.Png);
+                    if (customCursor != null) { customCursor.Dispose(); customCursor = null; }
+                    settings.CustomCursor = true;
+                    settings.Save();
+                    sync();
+                }
+                catch (Exception ex)
+                {
+                    note.TextColor = Ui.Danger;
+                    note.Text = "Couldn't read that file: " + ex.Message;
+                }
+            }
         }
 
         void ShowCalibrationMenu(Control button)
@@ -2668,6 +2806,7 @@ namespace Embris
                 hotkeyHook.OverlayKeyCode = (int)k;
                 settings.Save();
                 calibrationToggle.Text = "Calibration (" + Ui.KeyName(k) + ")";
+                overlayPageToggle.Text = "Show the overlay (" + Ui.KeyName(k) + ")";
             };
             tips.SetToolTip(keyOverlay, "Shows or hides the crosshair and the ghost of your start view over the game");
             // Let key pickers receive the hotkey itself instead of it toggling the macro.

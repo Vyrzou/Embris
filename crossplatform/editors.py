@@ -582,31 +582,64 @@ def _layout():
 
 
 class KeyboardPreview(QWidget):
-    """A small keyboard that lights up the key of the selected step."""
+    """A small keyboard that lights up the key of the selected step. Clicking a key adds a press of it."""
     CAPS = _layout()
+    key_clicked = Signal(str)
 
     def __init__(self, theme_getter):
         super().__init__()
         self.theme = theme_getter
         self.lit = set()
+        self.hover = -1
         self.setMinimumHeight(80)
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def metrics(self):
+        unit = (self.width() - 1) / 15.0
+        gap = max(2.0, unit * 0.12)
+        return unit, gap, (self.height() - 1 - gap * 5) / 6.0
+
+    def cap_rect(self, cap, unit, gap, row_h):
+        row, x, w = cap[0], cap[1], cap[2]
+        return QRectF(x * unit, row * (row_h + gap), w * unit - gap, row_h)
+
+    def cap_at(self, pos):
+        unit, gap, row_h = self.metrics()
+        for i, cap in enumerate(self.CAPS):
+            if self.cap_rect(cap, unit, gap, row_h).contains(pos):
+                return i
+        return -1
+
+    def mouseMoveEvent(self, e):
+        h = self.cap_at(e.position())
+        if h != self.hover:
+            self.hover = h
+            self.update()
+
+    def leaveEvent(self, _):
+        self.hover = -1
+        self.update()
+
+    def mousePressEvent(self, e):
+        i = self.cap_at(e.position())
+        if e.button() == Qt.MouseButton.LeftButton and i >= 0:
+            self.key_clicked.emit(self.CAPS[i][4][0])
 
     def paintEvent(self, _):
         t = self.theme()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        unit = (self.width() - 1) / 15.0
-        gap = max(2.0, unit * 0.12)
-        row_h = (self.height() - 1 - gap * 5) / 6.0
+        unit, gap, row_h = self.metrics()
         f = QFont(self.font())
         f.setPixelSize(max(7, min(12, int(row_h * 0.55))))
         small = QFont(f)
         small.setPixelSize(max(6, f.pixelSize() - 2))
-        for row, x, w, label, keys in self.CAPS:
-            lit = any(k in self.lit for k in keys)
-            r = QRectF(x * unit, row * (row_h + gap), w * unit - gap, row_h)
-            p.setPen(QPen(QColor(t.accent if lit else _blend(t.border, t.text, 0.08)), 1))
-            p.setBrush(QColor(t.accent if lit else _blend(t.input, t.text, 0.05)))
+        for i, (row, x, w, label, keys) in enumerate(self.CAPS):
+            lit, hot = any(k in self.lit for k in keys), i == self.hover
+            r = self.cap_rect((row, x, w), unit, gap, row_h)
+            p.setPen(QPen(QColor(t.accent if lit or hot else _blend(t.border, t.text, 0.08)), 1))
+            p.setBrush(QColor(t.accent if lit else _blend(t.input, t.accent if hot else t.text, 0.25 if hot else 0.05)))
             p.drawRoundedRect(r, max(2.0, row_h * 0.18), max(2.0, row_h * 0.18))
             p.setFont(small if len(label) > 3 else f)
             p.setPen(QColor(t.on_accent if lit else t.sub))

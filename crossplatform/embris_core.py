@@ -67,11 +67,12 @@ DEFAULTS = {
     "click_hotkey": "f7", "click_interval_ms": 100.0, "click_button": 0, "click_double": False,
     "click_times": 0, "click_fixed": False, "click_x": 0, "click_y": 0,
     "snap_to_keys": True, "overlay_hotkey": "f10", "auto_save_recordings": False, "ghost_opacity": 25,
-    "frame_sync": 0,  # playback lines inputs up with the game's frames: 0 off, -1 the display's refresh rate, else that frame rate
+    "frame_sync": 0,
+    "custom_cursor": False, "cursor_size": 32,  # calibration overlay: the uploaded cursor instead of the crosshair, and its size  # playback lines inputs up with the game's frames: 0 off, -1 the display's refresh rate, else that frame rate
 }
 APP_ONLY = ("hotkey", "record_hotkey", "sidebar_collapsed", "bg_file", "bg_source", "bg_dim", "pinned", "close_to_tray", "theme_name", "theme_colors",
             "click_hotkey", "click_interval_ms", "click_button", "click_double", "click_times", "click_fixed", "click_x", "click_y",
-            "snap_to_keys", "overlay_hotkey", "auto_save_recordings", "ghost_opacity", "frame_sync")
+            "snap_to_keys", "overlay_hotkey", "auto_save_recordings", "ghost_opacity", "frame_sync", "custom_cursor", "cursor_size")
 
 
 def load_json(path, fallback):

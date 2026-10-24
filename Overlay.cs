@@ -1,4 +1,4 @@
-﻿// Calibration overlay: a click-through layer over the game with a crosshair at the centre and a faded
+// Calibration overlay: a click-through layer over the game with a crosshair at the centre and a faded
 // "ghost" of the view when the recording started. Line the live view up with the ghost before
 // playing, and every run starts from the same spot.
 using System;
@@ -10,6 +10,28 @@ using System.Windows.Forms;
 
 namespace Embris
 {
+    // The Calibration page's preview: the crosshair or the uploaded cursor on a dark game-like square.
+    class CursorPreview : UiControl
+    {
+        public Func<Image> GetImage;
+        public Func<int> GetSize;
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = Smooth(e);
+            var t = T;
+            var r = new RectangleF(0.75f, 0.75f, Width - 1.5f, Height - 1.5f);
+            Ui.FillRound(g, r, Ui.S(8), Ui.Blend(Color.FromArgb(18, 20, 24), t.Accent, 0.06f), t.Border, 1);
+            using (var pen = new Pen(Color.FromArgb(28, 255, 255, 255)))
+                for (int i = 1; i < 4; i++)
+                {
+                    g.DrawLine(pen, Width * i / 4f, Ui.S(6), Width * i / 4f, Height - Ui.S(6));
+                    g.DrawLine(pen, Ui.S(6), Height * i / 4f, Width - Ui.S(6), Height * i / 4f);
+                }
+            CalibrationOverlay.DrawCrosshair(g, Width / 2f, Height / 2f, GetImage != null ? GetImage() : null, GetSize != null ? GetSize() : 32);
+        }
+    }
+
     class CalibrationOverlay : Form
     {
         Image ghost;
@@ -120,17 +142,7 @@ namespace Embris
                 using (var pen = new Pen(Color.FromArgb(200, Theme.Current.Accent), 2) { DashStyle = DashStyle.Dash })
                     g.DrawRectangle(pen, r.X, r.Y, r.Width, r.Height);
             }
-            // Crosshair: dark outline so it shows on any background, accent lines and a centre dot.
-            float arm = Ui.S(18), gap = Ui.S(5);
-            foreach (var w in new[] { new { Color = Color.FromArgb(200, 10, 10, 12), Width = Ui.S(5f) }, new { Color = Theme.Current.Accent, Width = Ui.S(2.2f) } })
-                using (var pen = new Pen(w.Color, w.Width) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-                {
-                    g.DrawLine(pen, cx - arm, cy, cx - gap, cy);
-                    g.DrawLine(pen, cx + gap, cy, cx + arm, cy);
-                    g.DrawLine(pen, cx, cy - arm, cx, cy - gap);
-                    g.DrawLine(pen, cx, cy + gap, cx, cy + arm);
-                    g.DrawEllipse(pen, cx - Ui.S(1.5f), cy - Ui.S(1.5f), Ui.S(3), Ui.S(3));
-                }
+            DrawCrosshair(g, cx, cy, CustomCursor, CursorSize);
             if (hint.Length > 0)
             {
                 // GDI+ text (GDI text would punch holes in the transparency).
@@ -143,6 +155,59 @@ namespace Embris
                     g.DrawString(hint, f, Brushes.White, box, sf);
             }
         }
+        // The custom cursor drawn at the centre instead of the crosshair (null = the crosshair), and its size in pixels.
+        public Image CustomCursor;
+        public int CursorSize = 32;
+
+        public void Redraw() { Render(); }
+
+        // The crosshair, or a custom cursor image centred on (cx, cy). Also used by the preview on the Calibration page.
+        public static void DrawCrosshair(Graphics g, float cx, float cy, Image custom, int size)
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            if (custom != null)
+            {
+                float s = Ui.S(Math.Max(4, size)), w = s, h = s;
+                if (custom.Width > custom.Height) h = s * custom.Height / custom.Width; else w = s * custom.Width / custom.Height;
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.DrawImage(custom, cx - w / 2, cy - h / 2, w, h);
+                return;
+            }
+            // Crosshair: dark outline so it shows on any background, accent lines and a centre dot.
+            float arm = Ui.S(18), gap = Ui.S(5);
+            foreach (var p in new[] { new { Color = Color.FromArgb(200, 10, 10, 12), Width = Ui.S(5f) }, new { Color = Theme.Current.Accent, Width = Ui.S(2.2f) } })
+                using (var pen = new Pen(p.Color, p.Width) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                {
+                    g.DrawLine(pen, cx - arm, cy, cx - gap, cy);
+                    g.DrawLine(pen, cx + gap, cy, cx + arm, cy);
+                    g.DrawLine(pen, cx, cy - arm, cx, cy - gap);
+                    g.DrawLine(pen, cx, cy + gap, cx, cy + arm);
+                    g.DrawEllipse(pen, cx - Ui.S(1.5f), cy - Ui.S(1.5f), Ui.S(3), Ui.S(3));
+                }
+        }
+
+        // Reads a cursor or picture (.cur, .ico, .png, .gif, .jpg, .bmp) into a bitmap with transparency.
+        public static Bitmap LoadCursorImage(string file)
+        {
+            string ext = Path.GetExtension(file).ToLowerInvariant();
+            if (ext == ".ico")
+                using (var icon = new Icon(file, 256, 256)) return icon.ToBitmap();
+            if (ext == ".cur")
+                using (var cur = new System.Windows.Forms.Cursor(file))
+                {
+                    var bmp = new Bitmap(cur.Size.Width, cur.Size.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                    using (var g = Graphics.FromImage(bmp))
+                    {
+                        g.Clear(Color.Transparent);
+                        cur.Draw(g, new Rectangle(Point.Empty, cur.Size));
+                    }
+                    return bmp;
+                }
+            using (var s = new MemoryStream(File.ReadAllBytes(file)))
+            using (var img = Image.FromStream(s))
+                return new Bitmap(img);
+        }
+
         // Grabs the middle of an area of the screen (what the camera is looking at) and saves it.
         public static bool CaptureStartView(Rectangle area, string file)
         {

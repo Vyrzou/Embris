@@ -15,6 +15,65 @@ def start_view_file():
     return os.path.join(core.config_dir(), "start-view.png")
 
 
+def custom_cursor_file():
+    """The uploaded cursor, kept as a PNG in Embris's folder."""
+    return os.path.join(core.config_dir(), "custom-cursor.png")
+
+
+def save_custom_cursor(source):
+    """Reads a cursor or picture (.png, .cur, .ico, .gif, .jpg, .bmp) and stores it as the custom cursor.
+    Returns an error message, or None."""
+    pm = QPixmap(source)
+    if pm.isNull():
+        return "Couldn't read that file."
+    return None if pm.save(custom_cursor_file(), "PNG") else "Couldn't save the cursor."
+
+
+def draw_crosshair(p, cx, cy, accent, custom=None, size=32):
+    """The crosshair, or a custom cursor picture centred on (cx, cy). Also used by the Calibration page's preview."""
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    if custom is not None and not custom.isNull():
+        s = max(4, int(size))
+        w, h = (s, s * custom.height() / custom.width()) if custom.width() >= custom.height() else (s * custom.width() / custom.height(), s)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        p.drawPixmap(QRectF(cx - w / 2, cy - h / 2, w, h), custom, QRectF(custom.rect()))
+        return
+    # Crosshair: dark outline so it shows on any background, accent lines and a centre dot.
+    arm, gap = 18, 5
+    for color, width in ((QColor(10, 10, 12, 200), 5), (QColor(accent), 2.2)):
+        pen = QPen(color, width)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawLine(int(cx - arm), int(cy), int(cx - gap), int(cy))
+        p.drawLine(int(cx + gap), int(cy), int(cx + arm), int(cy))
+        p.drawLine(int(cx), int(cy - arm), int(cx), int(cy - gap))
+        p.drawLine(int(cx), int(cy + gap), int(cx), int(cy + arm))
+        p.drawEllipse(QRectF(cx - 1.5, cy - 1.5, 3, 3))
+
+
+class CursorPreview(QWidget):
+    """The Calibration page's preview: the crosshair or the uploaded cursor on a dark game-like square."""
+
+    def __init__(self, theme_getter, image_getter, size_getter):
+        super().__init__()
+        self.theme, self.image, self.size_of = theme_getter, image_getter, size_getter
+        self.setFixedSize(200, 200)
+
+    def paintEvent(self, _):
+        t = self.theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(QPen(QColor(t.border), 1))
+        p.setBrush(QColor(18, 20, 24))
+        p.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1), 8, 8)
+        p.setPen(QPen(QColor(255, 255, 255, 28), 1))
+        for i in range(1, 4):
+            p.drawLine(int(self.width() * i / 4), 6, int(self.width() * i / 4), self.height() - 6)
+            p.drawLine(6, int(self.height() * i / 4), self.width() - 6, int(self.height() * i / 4))
+        draw_crosshair(p, self.width() / 2, self.height() / 2, t.accent, self.image(), self.size_of())
+
+
 def screen_area(screen=None):
     """The screen the game is on (the one under the mouse), in Qt's coordinates."""
     from PySide6.QtGui import QCursor
@@ -47,6 +106,8 @@ class CalibrationOverlay(QWidget):
         self.ghost = None
         self.hint = ""
         self.ghost_opacity = 0.25  # how visible the start-view ghost is (0..1)
+        self.custom_cursor = None  # a QPixmap drawn instead of the crosshair
+        self.cursor_size = 32
 
     def show_over(self, area, ghost_file, hint):
         """Covers the area (the game's screen) and shows the ghost of the start view, if there is one."""
@@ -75,17 +136,7 @@ class CalibrationOverlay(QWidget):
             dash.setStyle(Qt.PenStyle.DashLine)
             p.setPen(dash)
             p.drawRect(r)
-        # Crosshair: dark outline so it shows on any background, accent lines and a centre dot.
-        arm, gap = 18, 5
-        for color, width in ((QColor(10, 10, 12, 200), 5), (QColor(t.accent), 2.2)):
-            pen = QPen(color, width)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            p.setPen(pen)
-            p.drawLine(int(cx - arm), int(cy), int(cx - gap), int(cy))
-            p.drawLine(int(cx + gap), int(cy), int(cx + arm), int(cy))
-            p.drawLine(int(cx), int(cy - arm), int(cx), int(cy - gap))
-            p.drawLine(int(cx), int(cy + gap), int(cx), int(cy + arm))
-            p.drawEllipse(QRectF(cx - 1.5, cy - 1.5, 3, 3))
+        draw_crosshair(p, cx, cy, t.accent, self.custom_cursor, self.cursor_size)
         if self.hint:
             f = QFont(self.font())
             f.setPixelSize(15)

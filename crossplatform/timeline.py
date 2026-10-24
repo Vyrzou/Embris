@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QWidget
 import embris_core as core
 
 GUTTER, RULER, ROW_H, SCROLL_H = 142, 30, 36, 12
-KEY_BLUE, MOUSE_GOLD, GREEN = "#6080B2", "#D6AA52", "#30C48D"
+GREEN = "#30C48D"
 MOUSE_TRACKS = ("Left click", "Right click", "Mouse moves")
 
 
@@ -769,8 +769,9 @@ class TimelineEditor(QWidget):
             color = QColor(_blend(t.sub, t.input, 0.4) if off else t.text)
             icon = value in MOUSE_TRACKS or value == "Typing"
             chip = QRectF(12, y + (ROW_H - 24) / 2, 30 if icon else GUTTER - 48, 24)
-            p.setPen(QPen(QColor(_blend(t.border, t.text, 0.15)), 1))
-            p.setBrush(QColor(_blend(t.input, t.text, 0.06)))
+            # Track buttons in the theme's accent (plain grey while the track is hidden).
+            p.setPen(QPen(QColor(_blend(t.border, t.text, 0.15) if off else _blend(t.border, t.accent, 0.55)), 1))
+            p.setBrush(QColor(_blend(t.input, t.text, 0.06) if off else _blend(t.input, t.accent, 0.16)))
             p.drawRoundedRect(chip, 4, 4)
             p.setPen(color)
             p.setFont(name_font)
@@ -818,7 +819,8 @@ class TimelineEditor(QWidget):
             r = self.bar_rect(e)
             if r is None or r.right() < GUTTER or r.left() > self.width() or r.bottom() < RULER or r.top() > bottom:
                 continue
-            tone = KEY_BLUE if e.kind == "key" else MOUSE_GOLD if e.kind in ("left", "right") else t.sub if e.kind == "move" else GREEN
+            # Theme colors: keys in the accent, clicks in a lighter accent, typing in green.
+            tone = t.accent if e.kind == "key" else _blend(t.accent, t.text, 0.45) if e.kind in ("left", "right") else t.sub if e.kind == "move" else GREEN
             fill = _blend(t.input, tone, 0.45 if e.kind == "move" else 0.42)
             is_sel = e in self.sel
             p.setPen(QPen(QColor(t.accent if is_sel else _blend(fill, tone, 0.6)), 2 if is_sel else 1))

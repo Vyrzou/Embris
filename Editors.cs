@@ -1,4 +1,4 @@
-﻿// The sequence editor's pieces: a model that groups raw steps into editable rows ("Key press",
+// The sequence editor's pieces: a model that groups raw steps into editable rows ("Key press",
 // "Delay"...), the step table, the keyboard preview and the icon tiles under the table.
 using System;
 using System.Collections.Generic;
@@ -601,12 +601,52 @@ namespace Embris
 
     // ---------------------------------------------------------------- keyboard preview
 
-    // A small keyboard that lights up the key(s) of the selected step.
+    // A small keyboard that lights up the key(s) of the selected step. Clicking a key adds a press of it.
     class KeyboardPreview : UiControl
     {
         struct Cap { public string Label; public float X, W; public int Row; public Keys[] Keys; }
         static readonly List<Cap> caps = BuildLayout();
         public readonly HashSet<Keys> Lit = new HashSet<Keys>();
+        public event Action<Keys> KeyClicked;
+        int hoverCap = -1;
+
+        public KeyboardPreview() { Cursor = Cursors.Hand; }
+
+        RectangleF CapRect(Cap c, float unit, float gap, float rowH)
+        {
+            return new RectangleF(c.X * unit, c.Row * (rowH + gap), c.W * unit - gap, rowH);
+        }
+
+        void Metrics(out float unit, out float gap, out float rowH)
+        {
+            unit = (Width - 1) / 15f;
+            gap = Math.Max(2f, unit * 0.12f);
+            rowH = (Height - 1 - gap * 5) / 6f;
+        }
+
+        int CapAt(Point p)
+        {
+            float unit, gap, rowH;
+            Metrics(out unit, out gap, out rowH);
+            for (int i = 0; i < caps.Count; i++) if (CapRect(caps[i], unit, gap, rowH).Contains(p)) return i;
+            return -1;
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            int h = CapAt(e.Location);
+            if (h != hoverCap) { hoverCap = h; Invalidate(); }
+        }
+
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); if (hoverCap >= 0) { hoverCap = -1; Invalidate(); } }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            int i = CapAt(e.Location);
+            if (e.Button == MouseButtons.Left && i >= 0 && KeyClicked != null) KeyClicked(caps[i].Keys[0]);
+        }
 
         static List<Cap> BuildLayout()
         {
@@ -659,18 +699,19 @@ namespace Embris
         {
             var g = Smooth(e);
             var t = T;
-            float unit = (Width - 1) / 15f, gap = Math.Max(2f, unit * 0.12f);
-            float rowH = (Height - 1 - gap * 5) / 6f;
+            float unit, gap, rowH;
+            Metrics(out unit, out gap, out rowH);
             float fontSize = Math.Max(5.5f, Math.Min(8.5f, rowH / Ui.Scale * 0.42f));
             var font = Ui.F((float)Math.Round(fontSize * 2) / 2);
             var small = Ui.F(Math.Max(5f, (float)Math.Round(fontSize * 1.6f) / 2));
-            foreach (var c in caps)
+            for (int i = 0; i < caps.Count; i++)
             {
-                bool lit = false;
+                var c = caps[i];
+                bool lit = false, hot = i == hoverCap;
                 foreach (var k in c.Keys) if (Lit.Contains(k)) { lit = true; break; }
-                var r = new RectangleF(c.X * unit, c.Row * (rowH + gap), c.W * unit - gap, rowH);
-                Ui.FillRound(g, r, Math.Max(2f, rowH * 0.18f), lit ? t.Accent : Ui.Blend(t.Input, t.Text, 0.05f),
-                    lit ? t.Accent : Ui.Blend(t.Border, t.Text, 0.08f), 1);
+                var r = CapRect(c, unit, gap, rowH);
+                Ui.FillRound(g, r, Math.Max(2f, rowH * 0.18f), lit ? t.Accent : Ui.Blend(t.Input, hot ? t.Accent : t.Text, hot ? 0.25f : 0.05f),
+                    lit || hot ? t.Accent : Ui.Blend(t.Border, t.Text, 0.08f), 1);
                 Ui.Text(g, c.Label, c.Label.Length > 3 ? small : font, Rectangle.Round(r), lit ? t.OnAccent : t.SubText, TextFormatFlags.HorizontalCenter);
             }
         }

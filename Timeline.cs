@@ -855,8 +855,6 @@ namespace Embris
 
         // ---------------------------------------------------------------- drawing
 
-        static readonly Color KeyBlue = Color.FromArgb(96, 128, 178), MouseGold = Color.FromArgb(214, 170, 82);
-
         protected override void OnPaint(PaintEventArgs pe)
         {
             var g = Smooth(pe);
@@ -889,7 +887,8 @@ namespace Embris
                 bool icon = row.Group == 1 || row.Track == "Typing";
                 // Keys show their name on a key cap; mouse tracks and typing get an icon and a name.
                 var chip = new RectangleF(Ui.S(12), y + (rowH - Ui.S(24)) / 2f, icon ? Ui.S(30) : gutter - Ui.S(48), Ui.S(24));
-                Ui.FillRound(g, chip, Ui.S(4), Ui.Blend(t.Input, t.Text, 0.06f), Ui.Blend(t.Border, t.Text, 0.15f), 1);
+                Ui.FillRound(g, chip, Ui.S(4), off ? Ui.Blend(t.Input, t.Text, 0.06f) : Ui.Blend(t.Input, t.Accent, 0.16f),
+                    off ? Ui.Blend(t.Border, t.Text, 0.15f) : Ui.Blend(t.Border, t.Accent, 0.55f), 1);
                 string chipText = row.Group == 1 ? (row.Track == "Mouse moves" ? "\uE7C2" : "\uE962") : row.Track == "Typing" ? "\uE8D2" : row.Track;
                 Ui.Text(g, chipText, icon ? Ui.Icons(9f) : Ui.F(8.5f), Rectangle.Round(chip), nameColor, TextFormatFlags.HorizontalCenter);
                 if (icon) Ui.Text(g, row.Track, Ui.F(9f), new Rectangle(Ui.S(48), y, gutter - Ui.S(82), rowH), nameColor, 0);
@@ -935,7 +934,8 @@ namespace Embris
                 var r = BarRect(e);
                 if (r.IsEmpty || r.Right < gutter || r.Left > Width || r.Bottom < ruler || r.Top > bottom) continue;
                 if (e.Kind == 3 && e != selected) { if (r.X == lastMoveX) continue; lastMoveX = r.X; }
-                Color tone = e.Kind == 0 ? KeyBlue : e.Kind <= 2 ? MouseGold : e.Kind == 3 ? t.SubText : Ui.Success;
+                // Theme colors: keys in the accent, clicks in a lighter accent, typing in green.
+                Color tone = e.Kind == 0 ? t.Accent : e.Kind <= 2 ? Ui.Blend(t.Accent, t.Text, 0.45f) : e.Kind == 3 ? t.SubText : Ui.Success;
                 Color fill = Ui.Blend(t.Input, tone, e.Kind == 3 ? 0.45f : 0.42f);
                 bool isSel = sel.Contains(e);
                 Ui.FillRound(g, r, Ui.S(5), fill, isSel ? t.Accent : Ui.Blend(fill, tone, 0.6f), isSel ? 2 : 1);

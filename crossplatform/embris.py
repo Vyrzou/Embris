@@ -699,9 +699,9 @@ class Bridge(QObject):
 # ---------------------------------------------------------------- main window
 
 class MainWindow(QMainWindow):
-    PAGES = ("Macro", "Presets", "Sequence editor", "Timeline editor", "Scripts", "Hotkeys", "Settings", "Themes && Colors", "Auto clicker")
-    NAV_ICONS = ("▤", "☰", "☷", "▥", "{ }", "⌨", "⚙", "◐", "◉")
-    NAV_ORDER = (0, 8, 1, 2, 3, 4, 5, 6, 7)  # sidebar order (page numbers): the auto clicker sits under Macro
+    PAGES = ("Macro", "Presets", "Sequence editor", "Timeline editor", "Scripts", "Hotkeys", "Settings", "Themes && Colors", "Auto clicker", "Calibration")
+    NAV_ICONS = ("▤", "☰", "☷", "▥", "{ }", "⌨", "⚙", "◐", "◉", "⌖")
+    NAV_ORDER = (0, 8, 1, 2, 3, 9, 4, 5, 6, 7)  # sidebar order (page numbers): the auto clicker under Macro, calibration after the editors
 
     def __init__(self):
         super().__init__()
@@ -985,6 +985,7 @@ class MainWindow(QMainWindow):
         self.build_settings()
         self.build_themes()
         self.build_auto_clicker()
+        self.build_calibration()
 
     def build_macro(self):
         v = self.page("Macro", "Choose the game, what to press or click, and how often.")
@@ -1394,8 +1395,14 @@ class MainWindow(QMainWindow):
                 lambda r: ed.set_position(self.seq, r, int(self.ed_x.value()), int(self.ed_y.value()))))
         g.addWidget(self.ed_x, 5, 1)
         g.addWidget(self.ed_y, 5, 2, 1, 2)
-        g.addWidget(label("Keyboard preview", "cardTitle"), 6, 0, 1, 4)
+        kb_title = QHBoxLayout()
+        kb_title.addWidget(label("Keyboard", "cardTitle"))
+        kb_title.addWidget(label("click a key to add it", "sub"))
+        kb_title.addStretch()
+        g.addLayout(kb_title, 6, 0, 1, 4)
         self.keyboard = KeyboardPreview(lambda: T)
+        self.keyboard.key_clicked.connect(lambda k: self.add_step_row(ed.KEY_PRESS, k))
+        self.keyboard.setToolTip("Click a key to add a press of it after the selected step")
         g.addWidget(self.keyboard, 7, 0, 1, 4)
         g.setRowStretch(7, 1)
         g.setColumnStretch(1, 1)
@@ -1915,11 +1922,124 @@ class MainWindow(QMainWindow):
     def toggle_overlay(self):
         self.toggle_overlay_core()
         shown = self.overlay is not None and self.overlay.isVisible()
-        if self.t_calibration.isChecked() != shown:
-            self.t_calibration.blockSignals(True)
-            self.t_calibration.setChecked(shown)
-            self.t_calibration.blockSignals(False)
-            self.t_calibration.update()
+        for toggle in (self.t_calibration, getattr(self, "t_overlay_page", None)):
+            if toggle is not None and toggle.isChecked() != shown:
+                toggle.blockSignals(True)
+                toggle.setChecked(shown)
+                toggle.blockSignals(False)
+                toggle.update()
+
+    # ----- calibration page: overlay settings and a custom cursor
+
+    def build_calibration(self):
+        v = self.page("Calibration", "Start every run from the same spot: a crosshair and a ghost of your start view over the game.")
+        c, g = self.card("Overlay")
+        self.t_overlay_page = Toggle("Show the overlay (%s)" % key_label(self.s.get("overlay_hotkey") or "f10"), False)
+        self.t_overlay_page.toggled.connect(lambda on: None if on == (self.overlay is not None and self.overlay.isVisible()) else self.toggle_overlay())
+        g.addWidget(self.t_overlay_page, 1, 0)
+        ghost_row = QHBoxLayout()
+        ghost_row.addWidget(label("Ghost of the start view", "sub"))
+        self.ghost_slider2 = QSlider(Qt.Orientation.Horizontal)
+        self.ghost_slider2.setRange(0, 100)
+        self.ghost_slider2.setValue(int(self.s.get("ghost_opacity", 25)))
+        self.ghost_slider2.setToolTip("How visible the ghost of your start view is (lower = more see-through)")
+        self.ghost_slider2.valueChanged.connect(self.set_ghost_opacity)
+        ghost_row.addWidget(self.ghost_slider2, 1)
+        self.ghost_text2 = label("%d%%" % int(self.s.get("ghost_opacity", 25)), "sub")
+        ghost_row.addWidget(self.ghost_text2)
+        g.addLayout(ghost_row, 1, 1)
+        retake = push("Retake start view in 3 s", slot=self.retake_start_view)
+        retake.setToolTip("Switch to the game and aim where your run starts; the view is captured after 3 seconds")
+        g.addWidget(retake, 2, 0)
+        g.addWidget(label("It's also saved each time you start recording.", "sub"), 2, 1)
+        g.addWidget(label("Before playing, line the game up with the ghost, then press %s to run." % key_label(self.s["hotkey"]), "sub", wrap=True), 3, 0, 1, 2)
+        g.setColumnStretch(1, 1)
+        v.addWidget(c)
+
+        c, g = self.card("Crosshair")
+        self.cursor_preview = ov.CursorPreview(lambda: T, self.custom_cursor_pixmap, lambda: int(self.s.get("cursor_size", 32)))
+        g.addWidget(self.cursor_preview, 1, 0, 5, 1)
+        g.addWidget(label("Show", "sub"), 1, 1)
+        self.cursor_style = QComboBox()
+        self.cursor_style.addItems(["Built-in crosshair", "My cursor image"])
+        self.cursor_style.currentIndexChanged.connect(self.set_cursor_style)
+        g.addWidget(self.cursor_style, 1, 2, 1, 2)
+        upload = push("Upload cursor", "primary", self.upload_cursor)
+        g.addWidget(upload, 2, 1, 1, 2)
+        self.cursor_remove = push("Remove", slot=self.remove_cursor)
+        g.addWidget(self.cursor_remove, 2, 3)
+        g.addWidget(label("Size", "sub"), 3, 1)
+        self.cursor_size_box = spin(int(self.s.get("cursor_size", 32)), 4, 512)
+        self.cursor_size_box.setToolTip("How big your cursor image is drawn, in pixels")
+        self.cursor_size_box.valueChanged.connect(lambda val: (self.set_setting("cursor_size", int(val)), self.apply_cursor()))
+        g.addWidget(self.cursor_size_box, 3, 2)
+        g.addWidget(label("px", "sub"), 3, 3)
+        self.cursor_note = label("", "sub", wrap=True)
+        g.addWidget(self.cursor_note, 4, 1, 1, 3)
+        g.setColumnStretch(2, 1)
+        g.setRowStretch(5, 1)
+        v.addWidget(c)
+        v.addStretch()
+        self.custom_cursor = None
+        self.sync_cursor_controls()
+
+    def custom_cursor_pixmap(self):
+        if not self.s.get("custom_cursor"):
+            return None
+        if self.custom_cursor is None and os.path.exists(ov.custom_cursor_file()):
+            self.custom_cursor = QPixmap(ov.custom_cursor_file())
+        return self.custom_cursor
+
+    def sync_cursor_controls(self):
+        have = os.path.exists(ov.custom_cursor_file())
+        if not have:
+            self.s["custom_cursor"] = False
+        self.cursor_style.blockSignals(True)
+        self.cursor_style.setCurrentIndex(1 if self.s.get("custom_cursor") else 0)
+        self.cursor_style.blockSignals(False)
+        self.cursor_remove.setEnabled(have)
+        self.cursor_note.setStyleSheet("")
+        self.cursor_note.setText("Your cursor is drawn at the centre of the game view, on top of the ghost." if have else
+                                 "Upload a .png, .cur or .ico (a PNG with a see-through background works best). It's drawn at the centre of the game view.")
+        self.apply_cursor()
+
+    def apply_cursor(self):
+        """Shows the current crosshair settings in the preview and on the overlay, if it's up."""
+        self.cursor_preview.update()
+        if getattr(self, "overlay", None) is not None:  # the pages are built before the overlay exists
+            self.overlay.custom_cursor = self.custom_cursor_pixmap()
+            self.overlay.cursor_size = int(self.s.get("cursor_size", 32))
+            self.overlay.update()
+
+    def set_cursor_style(self, index):
+        if index == 1 and not os.path.exists(ov.custom_cursor_file()):
+            self.sync_cursor_controls()
+            self.upload_cursor()
+            return
+        self.set_setting("custom_cursor", index == 1)
+        self.apply_cursor()
+
+    def upload_cursor(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Choose a cursor", "", "Cursors and pictures (*.png *.cur *.ico *.gif *.jpg *.jpeg *.bmp *.webp);;All files (*)")
+        if not path:
+            return
+        error = ov.save_custom_cursor(path)
+        if error:
+            self.cursor_note.setStyleSheet("color: %s;" % DANGER)
+            self.cursor_note.setText(error)
+            return
+        self.custom_cursor = None
+        self.set_setting("custom_cursor", True)
+        self.sync_cursor_controls()
+
+    def remove_cursor(self):
+        try:
+            os.remove(ov.custom_cursor_file())
+        except OSError:
+            pass
+        self.custom_cursor = None
+        self.set_setting("custom_cursor", False)
+        self.sync_cursor_controls()
 
     def toggle_overlay_core(self):
         if self.overlay is not None and self.overlay.isVisible():
@@ -1928,6 +2048,8 @@ class MainWindow(QMainWindow):
         if self.overlay is None:
             self.overlay = ov.CalibrationOverlay(lambda: T)
         self.overlay.ghost_opacity = int(self.s.get("ghost_opacity", 25)) / 100
+        self.overlay.custom_cursor = self.custom_cursor_pixmap()
+        self.overlay.cursor_size = int(self.s.get("cursor_size", 32))
         path = ov.start_view_file()
         ghost = os.path.exists(path)
         _, area = ov.screen_area()
@@ -1938,7 +2060,15 @@ class MainWindow(QMainWindow):
 
     def set_ghost_opacity(self, value):
         self.s["ghost_opacity"] = int(value)
-        self.ghost_text.setText("%d%%" % int(value))
+        # The Macro page and the Calibration page each have a ghost slider; keep them in step.
+        for slider, text in ((self.ghost_slider, self.ghost_text), (getattr(self, "ghost_slider2", None), getattr(self, "ghost_text2", None))):
+            if slider is None:
+                continue
+            if slider.value() != int(value):
+                slider.blockSignals(True)
+                slider.setValue(int(value))
+                slider.blockSignals(False)
+            text.setText("%d%%" % int(value))
         if self.overlay is not None:
             self.overlay.ghost_opacity = int(value) / 100
             self.overlay.update()
@@ -1978,6 +2108,7 @@ class MainWindow(QMainWindow):
         self.s["overlay_hotkey"] = key
         self.save()
         self.t_calibration.setText("Calibration (%s)" % key_label(key))
+        self.t_overlay_page.setText("Show the overlay (%s)" % key_label(key))
     def build_tray(self):
         self.tray = None
         if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -2641,11 +2772,11 @@ class MainWindow(QMainWindow):
         else:
             self.edit_row(lambda x: ed.set_key(self.seq, x, key))
 
-    def add_step_row(self, kind):
+    def add_step_row(self, kind, key=None):
         end = self.step_table.sel_end
         at = self.seq_rows[self.table_rows[end]].last + 1 if 0 <= end < len(self.table_rows) else len(self.seq)
         h = 250 if kind == ed.DELAY else 40 if kind == ed.CLICK else 50
-        self.seq[at:at] = ed.make(kind, self.ed_key.key or "e", hold_ms=h)
+        self.seq[at:at] = ed.make(kind, key or self.ed_key.key or "e", hold_ms=h)
         if not self.t_seq.isChecked():
             self.t_seq.setChecked(True)
         self.sequence_changed()
