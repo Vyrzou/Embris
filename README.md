@@ -14,6 +14,7 @@ with the same features.
 - **Auto clicker** with its own hotkey.
 - **Macro suite**: save macros, each with its own hotkey; hotstrings.
 - **Scripts**: macros as plain-text `.emb` files to share; reads AutoHotkey hotstring files (`.ahk`).
+- **Updates**: checks this repo's Releases on start-up (and from Settings → About). On Windows it downloads and installs the new version for you; on Mac/Linux it takes you to the download.
 - **Looks**: themes, custom colors with a color picker, video or picture backgrounds (decoded on the graphics card), compact view, pin on top, window opacity.
 
 ## Download
@@ -50,5 +51,6 @@ python crossplatform/embris.py
 | `Backgrounds.cs` | Custom backgrounds (Media Foundation / Direct3D 11 video) |
 | `Script.cs` | `.emb` scripts and `.ahk` import |
 | `AutoClicker.cs`, `Overlay.cs`, `ColorPicker.cs` | Auto clicker, calibration overlay, color picker |
-| `Setup.cs` | Windows installer / uninstaller |
+| `Updater.cs` | Update check and download from GitHub Releases |
+| `Setup.cs` | Windows installer / uninstaller (`/update` installs quietly) |
 | `crossplatform/` | Mac/Linux app (Qt) and its installers |

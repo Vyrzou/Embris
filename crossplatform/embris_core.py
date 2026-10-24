@@ -13,8 +13,28 @@ import time
 
 from pynput import keyboard, mouse
 
-VERSION = "1.5.4"
+VERSION = "1.6.0"
 IS_MAC = sys.platform == "darwin"
+
+# New versions are published as GitHub Releases.
+REPO = "Vyrzou/Embris"
+RELEASES_PAGE = "https://github.com/%s/releases" % REPO
+LATEST_RELEASE_API = "https://api.github.com/repos/%s/releases/latest" % REPO
+
+
+def parse_version(tag):
+    """'v1.6.0' -> (1, 6, 0, 0); None when there's no number in it. Missing parts count as 0."""
+    import re
+    m = re.search(r"\d+(\.\d+){0,3}", tag or "")
+    if not m:
+        return None
+    parts = [int(x) for x in m.group(0).split(".")]
+    return tuple(parts + [0] * (4 - len(parts)))
+
+
+def is_newer(tag, current=VERSION):
+    v = parse_version(tag)
+    return v is not None and v > parse_version(current)
 
 
 # ---------------------------------------------------------------- settings & presets

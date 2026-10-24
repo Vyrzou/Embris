@@ -104,41 +104,7 @@ namespace Embris
             lblStatus.Update();
             try
             {
-                CloseRunningEmbris();
-                Directory.CreateDirectory(InstallDir);
-                using (var src = typeof(SetupForm).Assembly.GetManifestResourceStream("Embris.exe"))
-                using (var dst = File.Create(ExePath))
-                    src.CopyTo(dst);
-                if (!SamePath(Application.ExecutablePath, UninstallerPath))
-                    File.Copy(Application.ExecutablePath, UninstallerPath, true);
-
-                CreateShortcut(StartMenuLink, ExePath);
-                if (chkDesktop.Checked) CreateShortcut(DesktopLink, ExePath);
-                else File.Delete(DesktopLink);
-
-                using (var k = Registry.CurrentUser.CreateSubKey(UninstallKey))
-                {
-                    k.SetValue("DisplayName", "Embris");
-                    k.SetValue("DisplayIcon", ExePath);
-                    k.SetValue("DisplayVersion", Ui.Version);
-                    k.SetValue("Publisher", "Embris");
-                    k.SetValue("InstallLocation", InstallDir);
-                    k.SetValue("UninstallString", "\"" + UninstallerPath + "\" /uninstall");
-                    k.SetValue("NoModify", 1);
-                    k.SetValue("NoRepair", 1);
-                    k.SetValue("EstimatedSize", (int)(new FileInfo(ExePath).Length / 1024));
-                }
-
-                // .emb macro files open with Embris.
-                using (var k = Registry.CurrentUser.CreateSubKey(@"Software\Classes\.emb")) k.SetValue("", "Embris.Script");
-                using (var k = Registry.CurrentUser.CreateSubKey(@"Software\Classes\Embris.Script"))
-                {
-                    k.SetValue("", "Embris macro");
-                    using (var icon = k.CreateSubKey("DefaultIcon")) icon.SetValue("", "\"" + ExePath + "\",0");
-                    using (var cmd = k.CreateSubKey(@"shell\open\command")) cmd.SetValue("", "\"" + ExePath + "\" \"%1\"");
-                }
-                SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero); // SHCNE_ASSOCCHANGED
-
+                InstallFiles(chkDesktop.Checked);
                 if (chkLaunch.Checked) { Process.Start(ExePath); Close(); return; }
                 done = true;
                 lblStatus.Text = "Installed! Open it from the Start menu" + (chkDesktop.Checked ? " or your desktop." : ".");
@@ -150,6 +116,60 @@ namespace Embris
                 lblStatus.Text = "Install failed: " + ex.Message;
             }
             btnInstall.Enabled = btnUninstall.Enabled = true;
+        }
+
+        // Copies Embris in, makes the shortcuts and registers it with Windows.
+        static void InstallFiles(bool desktopShortcut)
+        {
+            CloseRunningEmbris();
+            Directory.CreateDirectory(InstallDir);
+            using (var src = typeof(SetupForm).Assembly.GetManifestResourceStream("Embris.exe"))
+            using (var dst = File.Create(ExePath))
+                src.CopyTo(dst);
+            if (!SamePath(Application.ExecutablePath, UninstallerPath))
+                File.Copy(Application.ExecutablePath, UninstallerPath, true);
+
+            CreateShortcut(StartMenuLink, ExePath);
+            if (desktopShortcut) CreateShortcut(DesktopLink, ExePath);
+            else File.Delete(DesktopLink);
+
+            using (var k = Registry.CurrentUser.CreateSubKey(UninstallKey))
+            {
+                k.SetValue("DisplayName", "Embris");
+                k.SetValue("DisplayIcon", ExePath);
+                k.SetValue("DisplayVersion", Ui.Version);
+                k.SetValue("Publisher", "Embris");
+                k.SetValue("InstallLocation", InstallDir);
+                k.SetValue("UninstallString", "\"" + UninstallerPath + "\" /uninstall");
+                k.SetValue("NoModify", 1);
+                k.SetValue("NoRepair", 1);
+                k.SetValue("EstimatedSize", (int)(new FileInfo(ExePath).Length / 1024));
+            }
+
+            // .emb macro files open with Embris.
+            using (var k = Registry.CurrentUser.CreateSubKey(@"Software\Classes\.emb")) k.SetValue("", "Embris.Script");
+            using (var k = Registry.CurrentUser.CreateSubKey(@"Software\Classes\Embris.Script"))
+            {
+                k.SetValue("", "Embris macro");
+                using (var icon = k.CreateSubKey("DefaultIcon")) icon.SetValue("", "\"" + ExePath + "\",0");
+                using (var cmd = k.CreateSubKey(@"shell\open\command")) cmd.SetValue("", "\"" + ExePath + "\" \"%1\"");
+            }
+            SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero); // SHCNE_ASSOCCHANGED
+        }
+
+        // "EmbrisSetup /update": what Embris runs after downloading a new version. Installs with no
+        // window (keeping the desktop shortcut as it was) and reopens Embris.
+        static void SilentUpdate()
+        {
+            try
+            {
+                InstallFiles(File.Exists(DesktopLink));
+                Process.Start(ExePath);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Couldn't update Embris: " + ex.Message, "Embris Setup");
+            }
         }
 
         public static bool Uninstall()
@@ -221,6 +241,7 @@ namespace Embris
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             if (args.Length > 0 && args[0].Equals("/uninstall", StringComparison.OrdinalIgnoreCase)) Uninstall();
+            else if (args.Length > 0 && args[0].Equals("/update", StringComparison.OrdinalIgnoreCase)) SilentUpdate();
             else Application.Run(new SetupForm());
         }
     }

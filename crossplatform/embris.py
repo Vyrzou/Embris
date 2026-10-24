@@ -10,9 +10,9 @@ import sys
 import threading
 import time
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QLinearGradient, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QRadialGradient, QShortcut
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtNetwork import QLocalServer, QLocalSocket, QNetworkAccessManager, QNetworkReply, QNetworkRequest
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QLinearGradient, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QRadialGradient, QShortcut
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QColorDialog, QComboBox, QDialog,
                                QDoubleSpinBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
                                QAbstractItemView, QFileDialog, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy, QSlider,
@@ -757,6 +757,9 @@ class MainWindow(QMainWindow):
         self.apply_sidebar()
         self.show_page(0)
         self.refresh_presets()
+        self.new_release = None  # a newer version found by the last check
+        self.update_reply = None
+        QTimer.singleShot(4000, lambda: self.check_updates(False))  # out of the way of start-up
         self.refresh_sequence()
         self.update_enabled()
         self.update_status()
@@ -1625,6 +1628,13 @@ class MainWindow(QMainWindow):
                 "Works on X11 desktops. On Wayland, sending keys and the hotkey may not work - pick an \"X11\" / "
                 "\"Xorg\" session at login. Bringing the game to the front needs xdotool.")
         g.addWidget(label(perm, "sub", wrap=True), 3, 0)
+        up = QHBoxLayout()
+        self.btn_update = push("Check for updates", slot=self.update_clicked)
+        self.btn_update.setToolTip("Gets the newest Embris from " + core.RELEASES_PAGE)
+        self.lbl_update = label("", "sub")
+        up.addWidget(self.btn_update)
+        up.addWidget(self.lbl_update, 1)
+        g.addLayout(up, 5, 0)
         ex = QHBoxLayout()
         ex.addWidget(push("Quit Embris", slot=self.exit_app))
         ex.addWidget(push("Uninstall Embris", slot=self.uninstall))
@@ -2077,6 +2087,64 @@ class MainWindow(QMainWindow):
             self.tray.hide()
         ev.accept()
         QApplication.instance().quit()
+
+    # ------------------------------------------------------------ updates (GitHub Releases)
+
+    def update_clicked(self):
+        if self.new_release:
+            # The Mac/Linux installers run from a download, so take them to it.
+            QDesktopServices.openUrl(QUrl(self.new_release.get("html_url") or core.RELEASES_PAGE))
+        else:
+            self.check_updates(True)
+
+    def check_updates(self, manual):
+        """Asks GitHub for the newest release (Qt's networking uses the system's certificates). On
+        start-up it's quiet unless there's a new version."""
+        if self.update_reply is not None:
+            return
+        if manual:
+            self.lbl_update.setStyleSheet("")
+            self.lbl_update.setText("Checking...")
+        if not hasattr(self, "net"):
+            self.net = QNetworkAccessManager(self)
+        req = QNetworkRequest(QUrl(core.LATEST_RELEASE_API))
+        req.setRawHeader(b"User-Agent", ("Embris/" + VERSION).encode())  # GitHub's API wants one
+        req.setRawHeader(b"Accept", b"application/vnd.github+json")
+        self.update_reply = reply = self.net.get(req)
+        reply.finished.connect(lambda: self.update_checked(reply, manual))
+
+    def update_checked(self, reply, manual):
+        self.update_reply = None
+        reply.deleteLater()
+        status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
+        if status == 404:  # nothing published yet
+            if manual:
+                self.lbl_update.setText("No releases published yet.")
+            return
+        if reply.error() != QNetworkReply.NetworkError.NoError:
+            if manual:
+                self.lbl_update.setStyleSheet("color: %s;" % DANGER)
+                self.lbl_update.setText("Couldn't reach GitHub: " + reply.errorString())
+            return
+        try:
+            release = json.loads(bytes(reply.readAll()).decode("utf-8"))
+        except ValueError:
+            return
+        tag = release.get("tag_name", "")
+        if not core.is_newer(tag):
+            if manual:
+                self.lbl_update.setText("You have the newest version.")
+            return
+        self.new_release = release
+        version = ".".join(str(x) for x in core.parse_version(tag)[:3])
+        accent = "color: %s;" % T.accent
+        self.lbl_update.setStyleSheet(accent)
+        self.lbl_update.setText("Version %s is out! Download it and run the installer again." % version)
+        self.btn_update.setText("Get v" + version)
+        self.side_footer[1].setStyleSheet(accent)
+        self.side_footer[1].setText("Update available: v" + version)
+        if not manual and self.tray is not None and not self.isVisible():
+            self.tray.showMessage("Embris %s is out" % version, "Open Embris and go to Settings to get it.")
 
     def uninstall(self):
         what = "Embris.app" if IS_MAC else "Embris and its app-menu entry"

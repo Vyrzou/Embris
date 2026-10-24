@@ -1111,6 +1111,11 @@ namespace Embris
             Opacity = settings.WindowOpacity / 100.0;
             ApplyGlass();
             if (settings.BgFile != "") SetBackground(settings.BgFile, settings.BgSource);
+            // Look for a new version a few seconds after start-up, out of the way.
+            var updateTimer = new System.Windows.Forms.Timer { Interval = 4000 };
+            updateTimer.Tick += (s, ev) => { updateTimer.Dispose(); CheckForUpdates(false); };
+            updateTimer.Start();
+            sideFooter2.Click += (s, ev) => { if (newRelease != null) ShowPage(6); };
         }
 
         void CaptureBounds(Control parent)
@@ -2775,12 +2780,95 @@ namespace Embris
             tips.SetToolTip(fps, "60 is smoothest; lower uses less of your PC (while the game is in front it's 15 anyway)");
 
             var about = Card(p, "About", 32, 444, 676, 96);
-            Add(about, new TextLabel { Text = "Embris v" + Ui.Version }, 18, 44, 140, 22);
+            Add(about, new TextLabel { Text = "Embris v" + Ui.Version }, 18, 44, 120, 22);
+            btnUpdate = Add(about, new RoundButton { Icon = "", Text = "Check for updates" }, 140, 38, 196, 32);
+            btnUpdate.Click += (s, e) => UpdateClicked();
+            lblUpdate = Add(about, new TextLabel { Sub = true, Font = Ui.F(9f) }, 346, 44, 312, 22);
+            tips.SetToolTip(btnUpdate, "Gets the newest Embris from " + Updater.ReleasesPage);
             Label(about, "Settings and presets are saved in " + Settings.Dir, 18, 68, 640);
             var exit = Add(about, new RoundButton { Icon = "", Text = "Exit Embris" }, 316, 10, 150, 32);
             exit.Click += (s, e) => ExitApp();
             var uninstall = Add(about, new RoundButton { Icon = "", Text = "Uninstall Embris" }, 476, 10, 182, 32);
             uninstall.Click += (s, e) => Uninstall();
+        }
+
+        // ---------- updates (GitHub Releases) ----------
+
+        RoundButton btnUpdate;
+        TextLabel lblUpdate;
+        ReleaseInfo newRelease; // a newer version found by the last check
+        bool updateBusy;
+
+        void UpdateClicked()
+        {
+            if (newRelease != null) InstallUpdate();
+            else CheckForUpdates(true);
+        }
+
+        // Asks GitHub for the newest release. On start-up it's quiet unless there is a new version.
+        async void CheckForUpdates(bool manual)
+        {
+            if (updateBusy) return;
+            updateBusy = true;
+            if (manual) { lblUpdate.TextColor = null; lblUpdate.Text = "Checking..."; }
+            try
+            {
+                var r = await Updater.LatestAsync();
+                if (IsDisposed) return;
+                if (Updater.IsNewer(r))
+                {
+                    newRelease = r;
+                    lblUpdate.TextColor = Theme.Current.Accent;
+                    lblUpdate.Text = "Version " + r.Version.ToString(3) + " is out!";
+                    btnUpdate.Text = Updater.CanInstall(r) ? "Update to v" + r.Version.ToString(3) : "Open download page";
+                    sideFooter2.TextColor = Theme.Current.Accent;
+                    sideFooter2.Text = "Update available: v" + r.Version.ToString(3);
+                    sideFooter2.Cursor = Cursors.Hand;
+                    if (!manual && tray != null && !Visible)
+                        tray.ShowBalloonTip(4000, "Embris " + r.Version.ToString(3) + " is out", "Open Embris and go to Settings to update.", ToolTipIcon.Info);
+                }
+                else if (manual) lblUpdate.Text = r == null ? "No releases published yet." : "You have the newest version.";
+            }
+            catch (Exception ex)
+            {
+                if (manual && !IsDisposed) { lblUpdate.TextColor = Ui.Danger; lblUpdate.Text = "Couldn't reach GitHub: " + ex.GetBaseException().Message; }
+            }
+            finally { updateBusy = false; }
+        }
+
+        // Downloads the new installer and runs it; it closes Embris, updates it and opens it again.
+        async void InstallUpdate()
+        {
+            var r = newRelease;
+            if (updateBusy || r == null) return;
+            if (!Updater.CanInstall(r)) { Process.Start(r.PageUrl); return; }
+            string notes = r.Notes.Trim();
+            if (notes.Length > 600) notes = notes.Substring(0, 600) + "...";
+            var answer = MessageBox.Show(this,
+                "Update Embris from v" + Ui.Version + " to v" + r.Version.ToString(3) + "?\n\n" +
+                (notes != "" ? notes + "\n\n" : "") + "Embris will close, update and open again. Your settings and macros are kept.",
+                "Update Embris", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (answer != DialogResult.Yes) return;
+            if (running) Toggle();
+            if (recordingNow) ToggleRecording();
+            updateBusy = true;
+            btnUpdate.Enabled = false;
+            lblUpdate.TextColor = null;
+            lblUpdate.Text = "Downloading...";
+            try
+            {
+                string setup = await Updater.DownloadSetupAsync(r);
+                settings.Save();
+                Updater.RunSetup(setup);
+                ExitApp();
+            }
+            catch (Exception ex)
+            {
+                lblUpdate.TextColor = Ui.Danger;
+                lblUpdate.Text = "Download failed: " + ex.GetBaseException().Message;
+                btnUpdate.Enabled = true;
+            }
+            finally { updateBusy = false; }
         }
 
         // Installed copies have the installer next to them as "Uninstall Embris.exe"; it asks, closes
