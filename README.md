@@ -12,6 +12,8 @@ with the same features.
 - **Undo / redo** (Ctrl+Z / Ctrl+Shift+Z), repeat count and any playback speed.
 - **Calibration overlay** for surf and other maps: a crosshair and a see-through ghost of the start view, to start every run from the same spot.
 - **Auto clicker** with its own hotkey.
+- **Key binds**: make keys do things in games. Hold R to spam left click, press F to hold the mouse down, spam or hold a key, or start a macro from your suite; while held, as a toggle, or once per press, optionally only while the game is in front.
+- **Calibration page**: the overlay's settings in one place, and your own cursor image (.png, .cur, .ico) instead of the crosshair.
 - **Macro suite**: save macros, each with its own hotkey; hotstrings.
 - **Scripts**: macros as plain-text `.emb` files to share; reads AutoHotkey hotstring files (`.ahk`).
 - **Updates**: checks this repo's Releases on start-up (and from Settings → About). On Windows it downloads and installs the new version for you; on Mac/Linux it takes you to the download.

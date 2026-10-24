@@ -699,9 +699,9 @@ class Bridge(QObject):
 # ---------------------------------------------------------------- main window
 
 class MainWindow(QMainWindow):
-    PAGES = ("Macro", "Presets", "Sequence editor", "Timeline editor", "Scripts", "Hotkeys", "Settings", "Themes && Colors", "Auto clicker", "Calibration")
-    NAV_ICONS = ("▤", "☰", "☷", "▥", "{ }", "⌨", "⚙", "◐", "◉", "⌖")
-    NAV_ORDER = (0, 8, 1, 2, 3, 9, 4, 5, 6, 7)  # sidebar order (page numbers): the auto clicker under Macro, calibration after the editors
+    PAGES = ("Macro", "Presets", "Sequence editor", "Timeline editor", "Scripts", "Hotkeys", "Settings", "Themes && Colors", "Auto clicker", "Calibration", "Key binds")
+    NAV_ICONS = ("▤", "☰", "☷", "▥", "{ }", "⌨", "⚙", "◐", "◉", "⌖", "⊞")
+    NAV_ORDER = (0, 8, 10, 1, 2, 3, 9, 4, 5, 6, 7)  # sidebar order (page numbers): auto clicker and key binds under Macro, calibration after the editors
 
     def __init__(self):
         super().__init__()
@@ -719,6 +719,15 @@ class MainWindow(QMainWindow):
                                          lambda hs: self.bridge.call.emit(lambda: self.on_hotstrings_toggled(hs)))
         self.suite_keys = set()
         self.suite_preset = -1
+        # Key binds run from the keyboard listener.
+        self.bind_engine = core.BindEngine()
+        self.bind_engine.enabled = bool(self.s.get("binds_on", True))
+        self.bind_engine.own_focused = lambda: self.watcher.own_focused
+        self.bind_engine.game_in_front = self.game_in_front
+        self.bind_engine.on_macro = lambda name: self.bridge.call.emit(lambda: self.run_suite_macro(name))
+        self.bind_engine.set_binds(list(self.s.get("binds") or []))
+        self.watcher.binds = self.bind_engine
+        self.front_cache = (0.0, False)
         self.seq_rows, self.table_rows, self.editors, self.record_texts = [], [], [], {}
         self.syncing_editor = self.timeline_editing = self.testing = False
         self.timeline_needs_fit = True
@@ -986,6 +995,7 @@ class MainWindow(QMainWindow):
         self.build_themes()
         self.build_auto_clicker()
         self.build_calibration()
+        self.build_key_binds()
 
     def build_macro(self):
         v = self.page("Macro", "Choose the game, what to press or click, and how often.")
@@ -1929,6 +1939,196 @@ class MainWindow(QMainWindow):
                 toggle.blockSignals(False)
                 toggle.update()
 
+    # ----- key binds: keys that spam or hold a click or a key, or play a macro
+
+    def game_in_front(self):
+        """Whether the target app is in front (cached briefly: asking the system is slow). Listener thread."""
+        now = time.time()
+        if now - self.front_cache[0] < 0.5:
+            return self.front_cache[1]
+        name = (self.s.get("app_name") or "").lower()
+        game = bool(name) and name in core.front_window_title().lower()
+        self.front_cache = (now, game)
+        return game
+
+    def build_key_binds(self):
+        v = self.page("Key binds", "Make keys do things: hold R to spam clicks, press F to hold the mouse down, and more.")
+        top = QHBoxLayout()
+        top.addStretch()
+        self.t_binds_on = Toggle("Key binds on", bool(self.s.get("binds_on", True)))
+        self.t_binds_on.toggled.connect(self.set_binds_on)
+        top.addWidget(self.t_binds_on)
+        v.addLayout(top)
+        row = QHBoxLayout()
+        row.setSpacing(16)
+        c, g = self.card("Your binds")
+        self.bind_list = QListWidget()
+        self.bind_list.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.bind_list.currentRowChanged.connect(lambda _: self.load_bind())
+        g.addWidget(self.bind_list, 1, 0, 1, 2)
+        g.addWidget(push("Add bind", "primary", self.add_bind), 2, 0)
+        g.addWidget(push("Remove", slot=self.remove_bind), 2, 1)
+        g.setRowStretch(1, 1)
+        row.addWidget(c, 1)
+        c, g = self.card("Bind")
+        self.bind_editor = c
+        self.b_on = Toggle("On", True)
+        self.b_on.toggled.connect(lambda on: self.edit_bind(lambda b: b.update(on=bool(on))))
+        g.addWidget(self.b_on, 1, 0, 1, 2)
+        g.addWidget(label("When I press", "sub"), 2, 0)
+        self.b_trigger = KeyBox("r", self.pause_hotkey)
+        self.b_trigger.changed.connect(self.set_bind_trigger)
+        g.addWidget(self.b_trigger, 2, 1)
+        g.addWidget(label("Mode", "sub"), 3, 0)
+        self.b_mode = QComboBox()
+        self.b_mode.addItems(core.BIND_MODE_NAMES)
+        self.b_mode.currentIndexChanged.connect(lambda i: i >= 0 and self.edit_bind(lambda b: b.update(mode=core.BIND_MODES[i])))
+        g.addWidget(self.b_mode, 3, 1)
+        g.addWidget(label("Do", "sub"), 4, 0)
+        self.b_action = QComboBox()
+        self.b_action.addItems(core.BIND_ACTION_NAMES)
+        self.b_action.currentIndexChanged.connect(lambda i: i >= 0 and self.edit_bind(lambda b: b.update(action=core.BIND_ACTIONS[i])))
+        g.addWidget(self.b_action, 4, 1)
+        self.b_out_label = label("Key", "sub")
+        g.addWidget(self.b_out_label, 5, 0)
+        self.b_out = KeyBox("e", self.pause_hotkey)
+        self.b_out.changed.connect(lambda k: self.edit_bind(lambda b: b.update(out=k)))
+        g.addWidget(self.b_out, 5, 1)
+        self.b_macro_label = label("Macro", "sub")
+        g.addWidget(self.b_macro_label, 6, 0)
+        self.b_macro = QComboBox()
+        self.b_macro.activated.connect(lambda i: self.edit_bind(lambda b: b.update(macro=self.b_macro.itemText(i))))
+        g.addWidget(self.b_macro, 6, 1)
+        self.b_every_label = label("Every (ms)", "sub")
+        g.addWidget(self.b_every_label, 7, 0)
+        self.b_every = spin(50, 1, 3600000)
+        self.b_every.setToolTip("Time between clicks or key taps (50 ms = 20 a second)")
+        self.b_every.valueChanged.connect(lambda val: self.edit_bind(lambda b: b.update(every=float(val))))
+        g.addWidget(self.b_every, 7, 1)
+        self.b_only = Toggle("Only while %s is in front" % (self.s.get("app_name") or "the game"), False)
+        self.b_only.toggled.connect(lambda on: self.edit_bind(lambda b: b.update(only_game=bool(on))))
+        g.addWidget(self.b_only, 8, 0, 1, 2)
+        self.b_summary = label("", "sub", wrap=True)
+        g.addWidget(self.b_summary, 9, 0, 1, 2)
+        g.addWidget(label("The game still gets the key too: Mac and Linux can't hold a single key back.", "sub", wrap=True), 10, 0, 1, 2)
+        g.setColumnStretch(1, 1)
+        g.setRowStretch(11, 1)
+        row.addWidget(c, 1)
+        v.addLayout(row, 1)
+        self.loading_bind = False
+        self.refresh_bind_list()
+        if self.binds():
+            self.bind_list.setCurrentRow(0)
+        self.load_bind()
+
+    def binds(self):
+        if not isinstance(self.s.get("binds"), list):
+            self.s["binds"] = []
+        return self.s["binds"]
+
+    def push_binds(self):
+        self.bind_engine.set_binds(self.binds())
+        self.save()
+
+    def set_binds_on(self, on):
+        self.bind_engine.enabled = bool(on)
+        if not on:
+            self.bind_engine.stop_all()
+        self.set_setting("binds_on", bool(on))
+
+    def is_hotkey(self, key):
+        s = self.s
+        return key in (s["hotkey"], s["record_hotkey"], s.get("click_hotkey"), s.get("overlay_hotkey")) or any(p.get("hotkey") == key for p in self.presets)
+
+    def selected_bind(self):
+        i = self.bind_list.currentRow()
+        binds = self.binds()
+        return binds[i] if 0 <= i < len(binds) else None
+
+    def refresh_bind_list(self):
+        keep = self.bind_list.currentRow()
+        self.bind_list.blockSignals(True)
+        self.bind_list.clear()
+        for b in self.binds():
+            self.bind_list.addItem(core.bind_title(b))
+        self.bind_list.setCurrentRow(min(keep, len(self.binds()) - 1))
+        self.bind_list.blockSignals(False)
+
+    def add_bind(self):
+        used = {b["key"] for b in self.binds()}
+        key = next((k for k in "rfgvxcztb" if k not in used and not self.is_hotkey(k)), "r")
+        self.binds().append(core.new_bind(key))
+        self.push_binds()
+        self.refresh_bind_list()
+        self.bind_list.setCurrentRow(len(self.binds()) - 1)
+        self.load_bind()
+
+    def remove_bind(self):
+        i = self.bind_list.currentRow()
+        if not 0 <= i < len(self.binds()):
+            return
+        del self.binds()[i]
+        self.push_binds()
+        self.refresh_bind_list()
+        self.bind_list.setCurrentRow(min(i, len(self.binds()) - 1))
+        self.load_bind()
+
+    def set_bind_trigger(self, key):
+        b = self.selected_bind()
+        if b is not None and self.is_hotkey(key):
+            self.b_trigger.set_key(b["key"])
+            self.set_status("problem", "That key is one of Embris's hotkeys", "Pick a different key for the bind.")
+            return
+        self.edit_bind(lambda b: b.update(key=key))
+
+    def edit_bind(self, change):
+        b = self.selected_bind()
+        if self.loading_bind or b is None:
+            return
+        change(b)
+        self.push_binds()
+        item = self.bind_list.item(self.bind_list.currentRow())
+        if item is not None:
+            item.setText(core.bind_title(b))
+        self.load_bind()
+
+    def load_bind(self):
+        """Shows the selected bind in the editor; fields that don't apply to its action are hidden."""
+        b = self.selected_bind()
+        for w in self.bind_editor.findChildren(QWidget):
+            w.setEnabled(b is not None)
+        if b is None:
+            self.b_summary.setText("Add a bind, or pick one from the list.")
+            return
+        self.loading_bind = True
+        for w in (self.b_on, self.b_mode, self.b_action, self.b_every, self.b_only):
+            w.blockSignals(True)
+        self.b_on.setChecked(bool(b.get("on", True)))
+        self.b_trigger.set_key(b["key"])
+        self.b_mode.setCurrentIndex(core.BIND_MODES.index(b["mode"]))
+        self.b_action.setCurrentIndex(core.BIND_ACTIONS.index(b["action"]))
+        self.b_out.set_key(b.get("out", "e"))
+        self.b_every.setValue(float(b.get("every", 50)))
+        self.b_only.setChecked(bool(b.get("only_game")))
+        for w in (self.b_on, self.b_mode, self.b_action, self.b_every, self.b_only):
+            w.blockSignals(False)
+        for w in (self.b_on, self.b_only):
+            w.update()
+        macro = b["action"] == "macro"
+        for w in (self.b_out_label, self.b_out):
+            w.setVisible(b["action"] in ("spam_key", "hold_key"))
+        for w in (self.b_macro_label, self.b_macro):
+            w.setVisible(macro)
+        if macro:
+            self.b_macro.clear()
+            self.b_macro.addItems([p.get("name", "") for p in self.presets])
+            self.b_macro.setCurrentIndex(next((n for n, p in enumerate(self.presets) if p.get("name", "").lower() == b.get("macro", "").lower()), -1))
+        for w in (self.b_every_label, self.b_every):
+            w.setVisible(core.bind_is_spam(b) and b["mode"] != "once")
+        self.b_mode.setEnabled(not macro)
+        self.b_summary.setText(core.bind_describe(b))
+        self.loading_bind = False
+
     # ----- calibration page: overlay settings and a custom cursor
 
     def build_calibration(self):
@@ -2233,6 +2433,7 @@ class MainWindow(QMainWindow):
             return
         self.running = self.player.running = False
         self.clicker.stop()
+        self.bind_engine.stop_all()  # let go of anything a key bind is holding
         if self.overlay is not None:
             self.overlay.close()
         if self.recording:
@@ -2534,7 +2735,13 @@ class MainWindow(QMainWindow):
                         "Press it anywhere to start or stop this macro." if key else "")
 
     def on_suite_key(self, key):
-        i = next((n for n, p in enumerate(self.presets) if p.get("hotkey") == key), -1)
+        self.run_suite_index(next((n for n, p in enumerate(self.presets) if p.get("hotkey") == key), -1))
+
+    def run_suite_macro(self, name):
+        """A key bind that plays a macro from the suite (same as its hotkey)."""
+        self.run_suite_index(next((n for n, p in enumerate(self.presets) if p.get("name", "").lower() == name.lower()), -1))
+
+    def run_suite_index(self, i):
         if i < 0 or self.recording:
             return
         if self.running:

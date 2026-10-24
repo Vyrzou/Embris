@@ -3,7 +3,7 @@
 set -e
 cd "$(dirname "$0")"
 
-VERSION="1.6.3"
+VERSION="1.7.0"
 SUPPORT="$HOME/Library/Application Support/Embris"
 APP="$HOME/Applications/Embris.app"
 

@@ -13,7 +13,7 @@ import time
 
 from pynput import keyboard, mouse
 
-VERSION = "1.6.3"
+VERSION = "1.7.0"
 IS_MAC = sys.platform == "darwin"
 
 # New versions are published as GitHub Releases.
@@ -68,11 +68,12 @@ DEFAULTS = {
     "click_times": 0, "click_fixed": False, "click_x": 0, "click_y": 0,
     "snap_to_keys": True, "overlay_hotkey": "f10", "auto_save_recordings": False, "ghost_opacity": 25,
     "frame_sync": 0,
-    "custom_cursor": False, "cursor_size": 32,  # calibration overlay: the uploaded cursor instead of the crosshair, and its size  # playback lines inputs up with the game's frames: 0 off, -1 the display's refresh rate, else that frame rate
+    "custom_cursor": False, "cursor_size": 32,
+    "binds_on": True, "binds": [],  # key binds (see new_bind)  # calibration overlay: the uploaded cursor instead of the crosshair, and its size  # playback lines inputs up with the game's frames: 0 off, -1 the display's refresh rate, else that frame rate
 }
 APP_ONLY = ("hotkey", "record_hotkey", "sidebar_collapsed", "bg_file", "bg_source", "bg_dim", "pinned", "close_to_tray", "theme_name", "theme_colors",
             "click_hotkey", "click_interval_ms", "click_button", "click_double", "click_times", "click_fixed", "click_x", "click_y",
-            "snap_to_keys", "overlay_hotkey", "auto_save_recordings", "ghost_opacity", "frame_sync", "custom_cursor", "cursor_size")
+            "snap_to_keys", "overlay_hotkey", "auto_save_recordings", "ghost_opacity", "frame_sync", "custom_cursor", "cursor_size", "binds_on", "binds")
 
 
 def load_json(path, fallback):
@@ -338,6 +339,7 @@ class InputWatcher:
         self.get_click_hotkey, self.on_click_hotkey, self.click_down = (lambda: None), (lambda: None), False  # auto clicker
         self.get_overlay_hotkey, self.on_overlay_hotkey, self.overlay_down = (lambda: None), (lambda: None), False  # calibration overlay
         self.lock = threading.Lock()
+        self.binds = None  # a BindEngine: key binds run from this listener
         self.kb = keyboard.Listener(on_press=self.on_press, on_release=self.on_release)
         # On macOS the intercept sees each event's raw movement, which still arrives when a game
         # locks the cursor to turn the camera. Other platforms ignore darwin_* options.
@@ -446,6 +448,10 @@ class InputWatcher:
                 return
         if self.hotstring_sets and name:
             self._track_typing(name)
+        if self.binds is not None:
+            if name in self.binds.sending:
+                return  # a key bind pressing its own key
+            self.binds.on_key(name, True)
         if self.recording and name and not self.own_focused:
             self._add({"t": "kd", "k": name})
 
@@ -470,6 +476,10 @@ class InputWatcher:
         if name in self.suite_down:
             self.suite_down.discard(name)
             return
+        if self.binds is not None:
+            if name in self.binds.sending:
+                return
+            self.binds.on_key(name, False)
         if self.recording and name and not self.own_focused and not self.paused:
             self._add({"t": "ku", "k": name})
 
@@ -655,6 +665,191 @@ class Player:
 
 
 # ---------------------------------------------------------------- auto clicker
+
+# ---------------------------------------------------------------- key binds
+
+BIND_MODES = ("held", "toggle", "once")
+BIND_MODE_NAMES = ("While held", "Toggle: press to start, again to stop", "Once per press")
+BIND_ACTIONS = ("spam_left", "spam_right", "hold_left", "hold_right", "spam_key", "hold_key", "macro")
+BIND_ACTION_NAMES = ("Spam left click", "Spam right click", "Hold left click", "Hold right click", "Spam a key",
+                     "Hold a key", "Play a macro from my suite")
+
+
+def new_bind(key="r"):
+    return {"on": True, "key": key, "mode": "held", "action": "spam_left", "out": "e", "every": 50.0,
+            "only_game": False, "macro": ""}
+
+
+def bind_is_spam(b):
+    return b["action"] in ("spam_left", "spam_right", "spam_key")
+
+
+def _bind_target(b):
+    a = b["action"]
+    if a in ("spam_left", "hold_left"):
+        return "left click"
+    if a in ("spam_right", "hold_right"):
+        return "right click"
+    if a == "macro":
+        return '"%s"' % b.get("macro", "")
+    return key_label(b.get("out", "e"))
+
+
+def bind_title(b):
+    """"R:  spam left click while held\""""
+    if b["action"] == "macro":
+        what, when = "play " + _bind_target(b), ""
+    else:
+        what = ("spam " if bind_is_spam(b) else "tap " if b["mode"] == "once" else "hold ") + _bind_target(b)
+        when = " while held" if b["mode"] == "held" else " (toggle)" if b["mode"] == "toggle" else ""
+    return ("" if b.get("on", True) else "(off) ") + key_label(b["key"]) + ":  " + what + when
+
+
+def bind_describe(b):
+    """A sentence for the editor: what pressing the key does."""
+    key = key_label(b["key"])
+    if b["action"] == "macro":
+        return ('Pressing %s starts "%s"; pressing it again stops it.' % (key, b["macro"])) if b.get("macro") else "Pick a macro from your suite."
+    every = float(b.get("every", 50))
+    rate = " %s times a second" % (("%.1f" % (1000 / every)).rstrip("0").rstrip(".") if every >= 100 else "%d" % round(1000 / max(every, 1)))
+    spam = bind_is_spam(b)
+    act = "spams " + _bind_target(b) + rate if spam else "taps " + _bind_target(b) if b["mode"] == "once" else "holds " + _bind_target(b) + " down"
+    if b["mode"] == "held":
+        return "Holding %s %s%s." % (key, act, "" if spam else " until you let go")
+    if b["mode"] == "toggle":
+        return "Pressing %s %s. Press it again to stop." % (key, "starts: it " + act if spam else act)
+    return "Each press of %s %s." % (key, "clicks once" if spam else act)
+
+
+class BindEngine:
+    """Runs the key binds. on_key is called from the keyboard listener for every key event.
+    (Mac/Linux can't keep a single key from reaching the game, so binds don't block their key.)"""
+
+    def __init__(self):
+        self.binds = []
+        self.enabled = True
+        self.game_in_front = lambda: True
+        self.own_focused = lambda: False
+        self.on_macro = lambda name: None  # called on the listener thread
+        self.kb = keyboard.Controller()
+        self.ms = mouse.Controller()
+        self.running = {}        # id(bind) -> stop function
+        self.down = set()
+        self.sending = set()     # keys the binds are pressing themselves (the listener skips them)
+        self.lock = threading.Lock()
+
+    def set_binds(self, binds):
+        self.stop_all()
+        self.binds = [dict(b) for b in binds]
+
+    def is_running(self, b):
+        with self.lock:
+            return id(b) in self.running
+
+    def on_key(self, name, down):
+        if not name or name in self.sending:
+            return
+        binds = [b for b in self.binds if b.get("on", True) and b["key"] == name]
+        if not binds:
+            return
+        if not down:
+            self.down.discard(name)
+            for b in binds:
+                if b["mode"] == "held" and b["action"] != "macro":
+                    self._stop(b)
+            return
+        repeat = name in self.down
+        self.down.add(name)
+        if repeat or not self.enabled or self.own_focused():
+            return
+        for b in binds:
+            if b.get("only_game") and not self.game_in_front():
+                continue
+            if b["action"] == "macro":
+                if b.get("macro"):
+                    self.on_macro(b["macro"])
+            elif b["mode"] == "held":
+                self._start(b)
+            elif b["mode"] == "toggle":
+                if self.is_running(b):
+                    self._stop(b)
+                else:
+                    self._start(b)
+            else:
+                self._once(b)
+
+    def _press(self, out, down):
+        k = to_pynput(out)
+        self.sending.add(out)
+        try:
+            (self.kb.press if down else self.kb.release)(k)
+        finally:
+            if not down:
+                threading.Timer(0.05, lambda: self.sending.discard(out)).start()
+
+    def _start(self, b):
+        with self.lock:
+            if id(b) in self.running:
+                return
+        a = b["action"]
+        if a in ("hold_left", "hold_right"):
+            btn = mouse.Button.left if a == "hold_left" else mouse.Button.right
+            self.ms.press(btn)
+            stop = lambda: self.ms.release(btn)
+        elif a == "hold_key":
+            out = b.get("out", "e")
+            self._press(out, True)
+            stop = lambda: self._press(out, False)
+        else:
+            flag = {"run": True}
+            threading.Thread(target=self._spam, args=(b, flag), daemon=True).start()
+            stop = lambda: flag.update(run=False)
+        with self.lock:
+            self.running[id(b)] = stop
+
+    def _stop(self, b):
+        with self.lock:
+            stop = self.running.pop(id(b), None)
+        if stop:
+            stop()
+
+    def stop_all(self):
+        with self.lock:
+            stops = list(self.running.values())
+            self.running.clear()
+        for s in stops:
+            s()
+
+    def _once(self, b):
+        a = b["action"]
+        if a in ("spam_left", "hold_left", "spam_right", "hold_right"):
+            self.ms.click(mouse.Button.left if "left" in a else mouse.Button.right)
+        else:
+            out = b.get("out", "e")
+            self._press(out, True)
+            self._press(out, False)
+
+    def _spam(self, b, flag):
+        every = max(1.0, float(b.get("every", 50))) / 1000.0
+        a, out = b["action"], b.get("out", "e")
+        start, due = time.perf_counter(), 0.0
+        while flag["run"]:
+            if a == "spam_key":
+                self._press(out, True)
+                time.sleep(min(0.015, every / 2))  # games read keys once per frame: hold it a moment
+                self._press(out, False)
+            else:
+                self.ms.click(mouse.Button.left if a == "spam_left" else mouse.Button.right)
+            due += every
+            now = time.perf_counter() - start
+            if now - due > 0.25:
+                due = now
+            while flag["run"]:
+                left = due - (time.perf_counter() - start)
+                if left <= 0:
+                    break
+                time.sleep(min(0.05, left - 0.015) if left > 0.02 else 0.0005 if left > 0.002 else 0)
+
 
 class AutoClicker:
     """Clicks a mouse button at a steady rate, where the pointer is or at a set spot, until stopped

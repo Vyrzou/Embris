@@ -344,6 +344,8 @@ namespace Embris
         public int BgGlass = 1;     // see-through cards: 0 always, 1 only when the window is small, 2 never
         public bool SnapToKeys = true; // timeline: bars catch other bars' edges
         public bool AutoSaveRecordings = false; // every recording also goes into the macro suite
+        public bool BindsOn = true;   // key binds active
+        public string Binds = "";     // key binds (see KeyBind.SaveAll)
         public int FrameSync = 0;   // playback lines inputs up with the game's frames: 0 off, -1 the display's refresh rate, else that frame rate
         public string BgCard = "";  // graphics card for the video ("" = Windows' default)
         public int WindowOpacity = 100; // % (lower lets you see what's behind Embris)
@@ -401,7 +403,7 @@ namespace Embris
         public void Save()
         {
             var lines = MacroLines();
-            lines.AddRange(new[] { "Hotkey=" + (int)Hotkey, "RecordHotkey=" + (int)RecordHotkey, "Pinned=" + Pinned, "CloseToTray=" + CloseToTray, "SidebarCollapsed=" + SidebarCollapsed, "BgFile=" + BgFile, "BgSource=" + BgSource, "BgDim=" + BgDim, "BgDecoder=" + BgDecoder, "BgFps=" + BgFps, "BgGlass=" + BgGlass, "BgCard=" + BgCard, "SnapToKeys=" + SnapToKeys, "AutoSaveRecordings=" + AutoSaveRecordings, "FrameSync=" + FrameSync, "WindowOpacity=" + WindowOpacity, "ThemeName=" + ThemeName, "ThemeColors=" + ThemeColors,
+            lines.AddRange(new[] { "Hotkey=" + (int)Hotkey, "RecordHotkey=" + (int)RecordHotkey, "Pinned=" + Pinned, "CloseToTray=" + CloseToTray, "SidebarCollapsed=" + SidebarCollapsed, "BgFile=" + BgFile, "BgSource=" + BgSource, "BgDim=" + BgDim, "BgDecoder=" + BgDecoder, "BgFps=" + BgFps, "BgGlass=" + BgGlass, "BgCard=" + BgCard, "SnapToKeys=" + SnapToKeys, "AutoSaveRecordings=" + AutoSaveRecordings, "FrameSync=" + FrameSync, "BindsOn=" + BindsOn, "Binds=" + Binds, "WindowOpacity=" + WindowOpacity, "ThemeName=" + ThemeName, "ThemeColors=" + ThemeColors,
                 "ClickHotkey=" + (int)ClickHotkey, "OverlayHotkey=" + (int)OverlayHotkey, "GhostOpacity=" + GhostOpacity, "CustomCursor=" + CustomCursor, "CursorSize=" + CursorSize, "ClickIntervalMs=" + ClickIntervalMs.ToString(Inv), "ClickButton=" + ClickButton, "ClickDouble=" + ClickDouble,
                 "ClickTimes=" + ClickTimes, "ClickFixed=" + ClickFixed, "ClickAtX=" + ClickAtX, "ClickAtY=" + ClickAtY });
             File.WriteAllLines(FilePath, lines);
@@ -454,6 +456,8 @@ namespace Embris
                 if (d.ContainsKey("BgCard")) BgCard = d["BgCard"];
                 if (d.ContainsKey("SnapToKeys")) SnapToKeys = bool.Parse(d["SnapToKeys"]);
                 if (d.ContainsKey("AutoSaveRecordings")) AutoSaveRecordings = bool.Parse(d["AutoSaveRecordings"]);
+                if (d.ContainsKey("BindsOn")) BindsOn = bool.Parse(d["BindsOn"]);
+                if (d.ContainsKey("Binds")) Binds = d["Binds"];
                 if (d.ContainsKey("FrameSync")) FrameSync = Math.Max(-1, Math.Min(1000, int.Parse(d["FrameSync"])));
                 if (d.ContainsKey("WindowOpacity")) WindowOpacity = Math.Max(20, Math.Min(100, int.Parse(d["WindowOpacity"])));
                 if (d.ContainsKey("ThemeName")) ThemeName = d["ThemeName"];
@@ -608,6 +612,7 @@ namespace Embris
         public event Action OverlayPressed; // the calibration overlay's hotkey (hook thread)
         public event Action ClickPressed; // the auto clicker's hotkey (hook thread)
         public volatile bool Paused;
+        public volatile BindEngine Binds; // key binds, run from this hook
         public event Action Pressed, RecordPressed; // raised on the hook thread
         public volatile int[] SuiteKeys = new int[0]; // hotkeys of macros in the suite
         public volatile HotstringSet[] HotstringSets = new HotstringSet[0];
@@ -765,6 +770,9 @@ namespace Embris
                     recIsDown = down;
                     return (IntPtr)1; // never part of the recording
                 }
+                // Key binds (spam or hold a click or key...): a blocked trigger key doesn't reach the game.
+                var binds = Binds;
+                if (!injected && binds != null && binds.OnKey(key, down)) return (IntPtr)1;
                 if (recording && !injected && Native.GetForegroundWindow() != ownWindow)
                     AddStep(new RecStep { Kind = down ? 0 : 1, Code = key });
             }
@@ -941,10 +949,10 @@ namespace Embris
         NumberBox pickX, pickY;
         Action pickDone;
 
-        Box[] pages = new Box[10];
-        NavButton[] navs = new NavButton[10];
-        // Sidebar order (page numbers): the auto clicker sits right under Macro, calibration after the editors.
-        static readonly int[] NavOrder = { 0, 8, 1, 2, 3, 9, 4, 5, 6, 7 };
+        Box[] pages = new Box[11];
+        NavButton[] navs = new NavButton[11];
+        // Sidebar order (page numbers): the auto clicker and key binds under Macro, calibration after the editors.
+        static readonly int[] NavOrder = { 0, 8, 10, 1, 2, 3, 9, 4, 5, 6, 7 };
         Box cardTarget, cardTiming, cardKey, cardClick, cardHotkey, cardSaved, cardBuilder;
         Box[] stepPanels = new Box[3];
         Dropdown cboTarget, cboMode;
@@ -994,6 +1002,7 @@ namespace Embris
             BuildThemePage();
             BuildAutoClickerPage();
             BuildCalibrationPage();
+            BuildKeyBindsPage();
             BuildMini();
 
             actionTimer.Tick += (s, e) => DoAction();
@@ -1050,6 +1059,14 @@ namespace Embris
             // Typing a number (say a 7 on the numpad) shouldn't trigger a hotkey.
             NumberBox.Editing += on => hotkeyHook.Paused = on;
             hotkeyHook.ClickPressed += () => { if (IsHandleCreated) BeginInvoke((Action)ToggleClicker); };
+            // Key binds run from the keyboard hook.
+            binds = KeyBind.ParseAll(settings.Binds);
+            bindEngine.Enabled = settings.BindsOn;
+            bindEngine.GameInFront = GameInFront;
+            bindEngine.PlayMacro += name => { if (IsHandleCreated) BeginInvoke((Action)(() => RunSuiteMacro(name))); };
+            HandleCreated += (s, e) => bindEngine.OwnWindow = Handle;
+            PushBinds();
+            hotkeyHook.Binds = bindEngine;
             hotkeyHook.Start();
 
             Theme.Changed += OnThemeChanged;
@@ -1279,12 +1296,12 @@ namespace Embris
             btnPin = Add(side, new RoundButton { Style = BtnStyle.Chip, PinIcon = true, Text = "" }, 172, 24, 34, 32);
             btnPin.Click += (s, e) => { settings.Pinned = !settings.Pinned; settings.Save(); ApplyPin(); };
 
-            string[] names = { "Macro", "Presets", "Sequence editor", "Timeline editor", "Scripts", "Hotkeys", "Settings", "Themes & Colors", "Auto clicker", "Calibration" };
-            string[] icons = { "\uE8FD", "\uE8F1", "\uE179", "\uE7C4", "\uE943", "\uE765", "\uE713", "\uE790", "\uE962", "\uE1D2" };
+            string[] names = { "Macro", "Presets", "Sequence editor", "Timeline editor", "Scripts", "Hotkeys", "Settings", "Themes & Colors", "Auto clicker", "Calibration", "Key binds" };
+            string[] icons = { "\uE8FD", "\uE8F1", "\uE179", "\uE7C4", "\uE943", "\uE765", "\uE713", "\uE790", "\uE962", "\uE1D2", "\uE7FC" };
             for (int i = 0; i < names.Length; i++)
             {
                 int n = i;
-                navs[i] = Add(side, new NavButton { Text = names[i], Icon = icons[i] }, 12, 84 + Array.IndexOf(NavOrder, i) * 50, 196, 44);
+                navs[i] = Add(side, new NavButton { Text = names[i], Icon = icons[i] }, 12, 84 + Array.IndexOf(NavOrder, i) * 46, 196, 42);
                 navs[i].Click += (s, e) => ShowPage(n);
                 tips.SetToolTip(navs[i], names[i]);
             }
@@ -1319,7 +1336,7 @@ namespace Embris
             }
             int top = c ? Ui.S(146) : Ui.S(84);
             for (int i = 0; i < navs.Length; i++)
-                navs[i].SetBounds(c ? Ui.S(8) : Ui.S(12), top + Array.IndexOf(NavOrder, i) * Ui.S(50), c ? Ui.S(48) : Ui.S(196), Ui.S(44));
+                navs[i].SetBounds(c ? Ui.S(8) : Ui.S(12), top + Array.IndexOf(NavOrder, i) * Ui.S(c ? 44 : 46), c ? Ui.S(48) : Ui.S(196), Ui.S(c ? 40 : 42));
             sideFooter1.Visible = sideFooter2.Visible = !c;
             sideFooter1.SetBounds(Ui.S(20), h - Ui.S(50), Ui.S(190), Ui.S(18));
             sideFooter2.SetBounds(Ui.S(20), h - Ui.S(30), Ui.S(190), Ui.S(18));
@@ -2833,6 +2850,212 @@ namespace Embris
             }
         }
 
+        // ---------- key binds: keys that spam or hold a click or a key, or play a macro ----------
+
+        List<KeyBind> binds = new List<KeyBind>();
+        readonly BindEngine bindEngine = new BindEngine();
+        ItemList bindList;
+        Toggle bindOn, bindBlock, bindOnlyGame;
+        KeyBox bindTrigger, bindKey;
+        Dropdown bindMode, bindAction, bindMacro;
+        NumberBox bindEvery;
+        TextLabel bindKeyLabel, bindMacroLabel, bindEveryLabel, bindEveryUnit, bindRate, bindSummary;
+        Box bindEditor;
+        bool loadingBind;
+
+        // Hands the binds to the hook (a fresh copy, so editing never races with a key press) and saves them.
+        void PushBinds()
+        {
+            bindEngine.StopAll();
+            bindEngine.Binds = binds.ConvertAll(b => b.Copy()).ToArray();
+            settings.Binds = KeyBind.SaveAll(binds);
+        }
+
+        [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+        IntPtr lastFront;
+        bool lastFrontIsGame;
+
+        // Whether the target app (the game) is the window in front. Called on the hook thread.
+        bool GameInFront()
+        {
+            IntPtr front = Native.GetForegroundWindow();
+            if (front == lastFront) return lastFrontIsGame;
+            bool game = false;
+            try
+            {
+                uint pid;
+                GetWindowThreadProcessId(front, out pid);
+                using (var p = Process.GetProcessById((int)pid))
+                    game = p.ProcessName.Equals(settings.TargetProcess, StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception) { }
+            lastFront = front;
+            lastFrontIsGame = game;
+            return game;
+        }
+
+        KeyBind SelectedBind { get { int i = bindList.SelectedIndex; return i >= 0 && i < binds.Count ? binds[i] : null; } }
+
+        void BuildKeyBindsPage()
+        {
+            var p = Page(10, "Key binds", "Make keys do things: hold R to spam clicks, press F to hold the mouse down, and more.");
+            var master = Add(p, new Toggle { Text = "Key binds on", Checked = settings.BindsOn }, 560, 62, 148, 26);
+            master.CheckedChanged += (s, e) =>
+            {
+                settings.BindsOn = bindEngine.Enabled = master.Checked;
+                if (!master.Checked) bindEngine.StopAll();
+                settings.Save();
+            };
+            tips.SetToolTip(master, "Turn all key binds on or off");
+
+            var listCard = Tagged(Card(p, "Your binds", 32, 100, 300, 436), VFill);
+            bindList = Add(listCard, Tagged(new ItemList { EmptyText = "No key binds yet. Click Add bind." }, VFill), 18, 46, 264, 318);
+            bindList.SelectedIndexChanged += (s, e) => LoadBind();
+            var add = Add(listCard, Tagged(new RoundButton { Style = BtnStyle.Primary, Icon = "", Text = "Add bind" }, AtBottom), 18, 380, 128, 38);
+            add.Click += (s, e) =>
+            {
+                // A new bind starts on a key no other bind uses.
+                Keys[] tryKeys = { Keys.R, Keys.F, Keys.G, Keys.V, Keys.X, Keys.C, Keys.Z, Keys.T, Keys.B };
+                var key = Array.Find(tryKeys, k => !binds.Exists(b => b.Trigger == k) && !IsHotkey(k));
+                binds.Add(new KeyBind { Trigger = key == Keys.None ? Keys.R : key });
+                BindsChanged();
+                bindList.SelectedIndex = binds.Count - 1;
+            };
+            var remove = Add(listCard, Tagged(new RoundButton { Icon = "", Text = "Remove" }, AtBottom), 154, 380, 128, 38);
+            remove.Click += (s, e) =>
+            {
+                int i = bindList.SelectedIndex;
+                if (i < 0 || i >= binds.Count) return;
+                binds.RemoveAt(i);
+                BindsChanged();
+                bindList.SelectedIndex = Math.Min(i, binds.Count - 1);
+            };
+
+            var ed = bindEditor = Tagged(Card(p, "Bind", 344, 100, 364, 436), VFill);
+            bindOn = Add(ed, new Toggle { Text = "On" }, 18, 44, 100, 30);
+            bindOn.CheckedChanged += (s, e) => EditBind(b => b.On = bindOn.Checked);
+            Label(ed, "When I press", 18, 91, 110);
+            bindTrigger = Add(ed, new KeyBox { Key = Keys.R }, 130, 84, 216, 34);
+            bindTrigger.KeyChanged += (s, e) =>
+            {
+                if (IsHotkey(bindTrigger.Key))
+                {
+                    var b = SelectedBind;
+                    bindTrigger.Key = b != null ? b.Trigger : Keys.R;
+                    SetStatus(StatusKind.Problem, "That key is one of Embris's hotkeys", "Pick a different key for the bind.");
+                    return;
+                }
+                EditBind(b => b.Trigger = bindTrigger.Key);
+            };
+            Label(ed, "Mode", 18, 133, 110);
+            bindMode = Add(ed, new Dropdown(), 130, 126, 216, 34);
+            foreach (var n in KeyBind.ModeNames) bindMode.Items.Add(n);
+            bindMode.SelectedIndexChanged += (s, e) => { if (bindMode.SelectedIndex >= 0) EditBind(b => b.Mode = (BindMode)bindMode.SelectedIndex); };
+            Label(ed, "Do", 18, 175, 110);
+            bindAction = Add(ed, new Dropdown(), 130, 168, 216, 34);
+            foreach (var n in KeyBind.ActionNames) bindAction.Items.Add(n);
+            bindAction.SelectedIndexChanged += (s, e) => { if (bindAction.SelectedIndex >= 0) EditBind(b => b.Action = (BindAction)bindAction.SelectedIndex); };
+            bindKeyLabel = Label(ed, "Key", 18, 217, 110);
+            bindKey = Add(ed, new KeyBox { Key = Keys.E }, 130, 210, 216, 34);
+            bindKey.KeyChanged += (s, e) => EditBind(b => b.Key = bindKey.Key);
+            bindMacroLabel = Label(ed, "Macro", 18, 217, 110);
+            bindMacro = Add(ed, new Dropdown(), 130, 210, 216, 34);
+            bindMacro.Opening += (s, e) => FillBindMacros();
+            bindMacro.SelectedIndexChanged += (s, e) => { if (bindMacro.SelectedItem != null) EditBind(b => b.Macro = bindMacro.SelectedItem.ToString()); };
+            bindEveryLabel = Label(ed, "Every", 18, 259, 110);
+            bindEvery = Num(ed, 1, 3600000, 0, 5, 50, 130, 252, 110);
+            bindEvery.ValueChanged += (s, e) => EditBind(b => b.EveryMs = (double)bindEvery.Value);
+            bindEveryUnit = Label(ed, "ms", 246, 259, 30);
+            bindRate = Add(ed, new TextLabel { Sub = true, Font = Ui.F(9f) }, 272, 259, 74, 22);
+            bindBlock = Add(ed, new Toggle { Text = "Keep the key from the game" }, 18, 298, 328, 30);
+            bindBlock.CheckedChanged += (s, e) => EditBind(b => b.Block = bindBlock.Checked);
+            tips.SetToolTip(bindBlock, "On: the game never sees the key (R won't reload). Off: the game gets it too.");
+            bindOnlyGame = Add(ed, new Toggle { Text = "Only while " + settings.TargetProcess + " is in front" }, 18, 332, 328, 30);
+            bindOnlyGame.CheckedChanged += (s, e) => EditBind(b => b.OnlyInGame = bindOnlyGame.Checked);
+            tips.SetToolTip(bindOnlyGame, "The app is the one chosen on the Macro page");
+            bindSummary = Add(ed, new TextLabel { Sub = true, Wrap = true, Font = Ui.F(9f) }, 18, 372, 328, 48);
+            tips.SetToolTip(bindEvery, "Time between clicks or key taps (50 ms = 20 a second)");
+            // Picking a key shouldn't set off hotkeys or other binds.
+            foreach (var box in new[] { bindTrigger, bindKey })
+            {
+                box.GotFocus += (s, e) => hotkeyHook.Paused = true;
+                box.LostFocus += (s, e) => hotkeyHook.Paused = false;
+            }
+
+            RefreshBindList();
+            if (binds.Count > 0) bindList.SelectedIndex = 0;
+            LoadBind();
+        }
+
+        bool IsHotkey(Keys k)
+        {
+            return k == settings.Hotkey || k == settings.RecordHotkey || k == settings.ClickHotkey || k == settings.OverlayHotkey || presets.Exists(x => x.Hotkey == k);
+        }
+
+        void FillBindMacros()
+        {
+            var b = SelectedBind;
+            bindMacro.Items.Clear();
+            foreach (var pr in presets) bindMacro.Items.Add(pr.Name);
+            bindMacro.SelectedIndex = b == null ? -1 : presets.FindIndex(x => x.Name.Equals(b.Macro, StringComparison.OrdinalIgnoreCase));
+        }
+
+        void RefreshBindList()
+        {
+            int keep = bindList.SelectedIndex;
+            bindList.Items.Clear();
+            foreach (var b in binds) bindList.Items.Add(b.Title);
+            bindList.SelectedIndex = keep < binds.Count ? keep : binds.Count - 1;
+            bindList.Invalidate();
+        }
+
+        void BindsChanged()
+        {
+            PushBinds();
+            settings.Save();
+            RefreshBindList();
+            LoadBind();
+        }
+
+        void EditBind(Action<KeyBind> change)
+        {
+            var b = SelectedBind;
+            if (loadingBind || b == null) return;
+            change(b);
+            PushBinds();
+            settings.Save();
+            if (bindList.SelectedIndex >= 0) bindList.Items[bindList.SelectedIndex] = b.Title;
+            bindList.Invalidate();
+            LoadBind();
+        }
+
+        // Shows the selected bind in the editor; fields that don't apply to its action are hidden.
+        void LoadBind()
+        {
+            var b = SelectedBind;
+            foreach (Control c in bindEditor.Controls) c.Enabled = b != null;
+            if (b == null) { bindSummary.Text = "Add a bind, or pick one from the list."; return; }
+            loadingBind = true;
+            bindOn.Checked = b.On;
+            bindTrigger.Key = b.Trigger;
+            bindMode.SelectedIndex = (int)b.Mode;
+            bindAction.SelectedIndex = (int)b.Action;
+            bindKey.Key = b.Key;
+            bindEvery.Value = (decimal)Math.Max(1, Math.Min(3600000, b.EveryMs));
+            bindBlock.Checked = b.Block;
+            bindOnlyGame.Checked = b.OnlyInGame;
+            bindOnlyGame.Text = "Only while " + settings.TargetProcess + " is in front";
+            bool macro = b.Action == BindAction.PlayMacro;
+            bindKeyLabel.Visible = bindKey.Visible = b.UsesKey;
+            bindMacroLabel.Visible = bindMacro.Visible = macro;
+            if (macro) FillBindMacros();
+            bindEveryLabel.Visible = bindEvery.Visible = bindEveryUnit.Visible = bindRate.Visible = b.IsSpam && b.Mode != BindMode.Once;
+            bindMode.Enabled = !macro;
+            bindRate.Text = b.EveryMs > 0 ? (1000 / b.EveryMs).ToString(b.EveryMs >= 100 ? "0.#" : "0") + "/s" : "";
+            bindSummary.Text = b.Describe();
+            loadingBind = false;
+        }
+
         void ShowCalibrationMenu(Control button)
         {
             var menu = NewMenu();
@@ -3462,9 +3685,13 @@ namespace Embris
         }
 
         // A macro's own hotkey: load and start it, or stop it if it's the one running.
-        void OnSuiteKey(int key)
+        void OnSuiteKey(int key) { RunSuiteIndex(presets.FindIndex(p => (int)p.Hotkey == key)); }
+
+        // A key bind that plays a macro from the suite (same as its hotkey).
+        void RunSuiteMacro(string name) { RunSuiteIndex(presets.FindIndex(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase))); }
+
+        void RunSuiteIndex(int i)
         {
-            int i = presets.FindIndex(p => (int)p.Hotkey == key);
             if (i < 0 || recordingNow) return;
             if (running)
             {
@@ -4288,6 +4515,7 @@ namespace Embris
             }
             if (recordingNow) ToggleRecording();
             clicker.Stop();
+            bindEngine.StopAll(); // let go of anything a key bind is holding
             if (overlay != null) overlay.Close();
             running = false;
             if (!skipSave)
