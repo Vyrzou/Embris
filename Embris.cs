@@ -1578,14 +1578,9 @@ namespace Embris
 
             // How long: until stopped (the default), a number of times, or once.
             cardTiming = Card(p, "How long", 32, 352, 330, 180);
-            string[] runNames = { "Until I stop it", "A number of times", "Once" };
-            int[] runX = { 18, 124, 248 }, runW = { 100, 118, 64 };
-            for (int i = 0; i < 3; i++)
-            {
-                int n = i;
-                runChips[i] = Add(cardTiming, new RoundButton { Style = BtnStyle.Chip, Text = runNames[i], Font = Ui.F(9f) }, runX[i], 44, runW[i], 30);
-                runChips[i].Click += (s, e) => SetRunMode(n);
-            }
+            // On: repeats until stopped. Off: runs a set number of times (1 = once).
+            runForever = Add(cardTiming, new Toggle { Text = "Repeat until I stop it", Checked = settings.RunMode == 0 }, 18, 44, 294, 30);
+            runForever.CheckedChanged += (s, e) => SetRunMode(runForever.Checked ? 0 : 1);
             lblInterval = Label(cardTiming, "Wait between runs (sec)", 18, 86, 164);
             numInterval = Num(cardTiming, 0.001m, MaxIntervalSec, 3, 1, settings.IntervalSec, 18, 108, 100);
             lblIntervalHint = Label(cardTiming, "", 124, 115, 60);
@@ -1636,18 +1631,18 @@ namespace Embris
 
         // ---------- the Macro page's "How long" and "What to do" ----------
 
-        readonly RoundButton[] runChips = new RoundButton[3];
+        Toggle runForever;
         NumberBox numTimes;
         TextLabel lblInterval, lblTimes, lblRunSummary, lblSeqSummary, lblSimpleNote;
         Toggle chkSeqMain;
         readonly List<Control> simpleControls = new List<Control>(); // the key press and click settings
 
+        // 0: repeat until stopped; 1: a set number of times. (2, "once" in 1.7.2, is 1 time.)
         void SetRunMode(int mode)
         {
-            settings.RunMode = Math.Max(0, Math.Min(2, mode));
-            for (int i = 0; i < 3; i++) { runChips[i].Selected = i == settings.RunMode; runChips[i].Invalidate(); }
-            // Once needs no wait; only "a number of times" needs a count.
-            lblInterval.Visible = numInterval.Visible = lblIntervalHint.Visible = settings.RunMode != 2;
+            if (mode == 2) { settings.RunTimes = 1; numTimes.Value = 1; mode = 1; }
+            settings.RunMode = mode == 0 ? 0 : 1;
+            if (runForever.Checked != (settings.RunMode == 0)) runForever.Checked = settings.RunMode == 0;
             lblTimes.Visible = numTimes.Visible = settings.RunMode == 1;
             settings.Save();
             UpdateRunSummary();
@@ -1658,13 +1653,12 @@ namespace Embris
         {
             if (lblRunSummary == null) return;
             string every = "every " + lblIntervalHint.Text.TrimStart('=', ' ');
-            string stop = Ui.KeyName(settings.Hotkey);
-            switch (settings.RunMode)
-            {
-                case 1: lblRunSummary.Text = "Runs " + (int)numTimes.Value + " times, " + every + ", then stops."; break;
-                case 2: lblRunSummary.Text = "Runs once, then stops."; break;
-                default: lblRunSummary.Text = "Runs " + every + " until you press " + stop + " or Stop."; break;
-            }
+            int times = (int)numTimes.Value;
+            // Once, the wait doesn't matter.
+            lblInterval.Visible = numInterval.Visible = lblIntervalHint.Visible = settings.RunMode == 0 || times > 1;
+            if (settings.RunMode == 0) lblRunSummary.Text = "Runs " + every + " until you press " + Ui.KeyName(settings.Hotkey) + " or Stop.";
+            else if (times == 1) lblRunSummary.Text = "Runs once, then stops.";
+            else lblRunSummary.Text = "Runs " + times + " times, " + every + ", then stops.";
         }
 
         void BuildPresetsPage()

@@ -1060,18 +1060,10 @@ class MainWindow(QMainWindow):
 
         c, g = self.card("How long")
         # Until stopped (the default), a number of times, or once.
-        runs = QHBoxLayout()
-        runs.setSpacing(6)
-        self.run_group = QButtonGroup(self)
-        self.run_chips = []
-        for n, name in enumerate(("Until I stop it", "A number of times", "Once")):
-            b = push(name, "chip", checkable=True)
-            b.clicked.connect(lambda _=False, n=n: self.set_run_mode(n))
-            self.run_group.addButton(b)
-            self.run_chips.append(b)
-            runs.addWidget(b)
-        runs.addStretch()
-        g.addLayout(runs, 1, 0, 1, 3)
+        # On: repeats until stopped. Off: runs a set number of times (1 = once).
+        self.t_forever = Toggle("Repeat until I stop it", int(s.get("run_mode", 0)) == 0)
+        self.t_forever.toggled.connect(lambda on: self.set_run_mode(0 if on else 1))
+        g.addWidget(self.t_forever, 1, 0, 1, 3)
         self.interval_label = label("Wait between runs (sec)", "sub")
         g.addWidget(self.interval_label, 2, 0, 1, 2)
         self.times_label = label("Times", "sub")
@@ -2596,12 +2588,17 @@ class MainWindow(QMainWindow):
         self.update_run_summary()
 
     def set_run_mode(self, mode):
-        """How long the macro runs: 0 until stopped, 1 a number of times, 2 once."""
-        mode = max(0, min(2, int(mode)))
-        self.s["run_mode"] = mode
-        self.run_chips[mode].setChecked(True)
-        for w in (self.interval_label, self.sp_interval, self.interval_hint):
-            w.setVisible(mode != 2)  # once needs no wait
+        """How long the macro runs: 0 until stopped, 1 a set number of times. (2, "once" in 1.7.2, is 1 time.)"""
+        mode = int(mode)
+        if mode == 2:
+            self.sp_times.setValue(1)
+            mode = 1
+        self.s["run_mode"] = 0 if mode == 0 else 1
+        if self.t_forever.isChecked() != (mode == 0):
+            self.t_forever.blockSignals(True)
+            self.t_forever.setChecked(mode == 0)
+            self.t_forever.blockSignals(False)
+            self.t_forever.update()
         for w in (self.times_label, self.sp_times):
             w.setVisible(mode == 1)
         self.update_run_summary()
@@ -2612,10 +2609,13 @@ class MainWindow(QMainWindow):
             return
         every = "every " + self.interval_hint.text().lstrip("= ")
         mode = int(self.s.get("run_mode", 0))
-        if mode == 1:
-            text = "Runs %d times, %s, then stops." % (int(self.sp_times.value()), every)
-        elif mode == 2:
+        times = int(self.sp_times.value())
+        for w in (self.interval_label, self.sp_interval, self.interval_hint):
+            w.setVisible(mode == 0 or times > 1)  # once, the wait doesn't matter
+        if mode == 1 and times == 1:
             text = "Runs once, then stops."
+        elif mode == 1:
+            text = "Runs %d times, %s, then stops." % (times, every)
         else:
             text = "Runs %s until you press %s or Stop." % (every, key_label(self.s["hotkey"]))
         self.run_summary.setText(text)
