@@ -70,11 +70,11 @@ DEFAULTS = {
     "frame_sync": 0,
     "run_mode": 0, "run_times": 10,  # how long the macro runs: 0 until stopped, 1 a number of times, 2 once
     "custom_cursor": False, "cursor_size": 32,
-    "binds_on": True, "binds": [],  # key binds (see new_bind)  # calibration overlay: the uploaded cursor instead of the crosshair, and its size  # playback lines inputs up with the game's frames: 0 off, -1 the display's refresh rate, else that frame rate
+    "binds_on": True, "binds": [], "seen_guide": False,  # key binds (see new_bind)  # calibration overlay: the uploaded cursor instead of the crosshair, and its size  # playback lines inputs up with the game's frames: 0 off, -1 the display's refresh rate, else that frame rate
 }
 APP_ONLY = ("hotkey", "record_hotkey", "sidebar_collapsed", "bg_file", "bg_source", "bg_dim", "pinned", "close_to_tray", "theme_name", "theme_colors",
             "click_hotkey", "click_interval_ms", "click_button", "click_double", "click_times", "click_fixed", "click_x", "click_y",
-            "snap_to_keys", "overlay_hotkey", "auto_save_recordings", "ghost_opacity", "frame_sync", "custom_cursor", "cursor_size", "binds_on", "binds")
+            "snap_to_keys", "overlay_hotkey", "auto_save_recordings", "ghost_opacity", "frame_sync", "custom_cursor", "cursor_size", "binds_on", "binds", "seen_guide")
 
 
 def load_json(path, fallback):
@@ -672,7 +672,7 @@ class Player:
 BIND_MODES = ("held", "toggle", "once")
 BIND_MODE_NAMES = ("While held", "Toggle: press to start, again to stop", "Once per press")
 BIND_ACTIONS = ("macro", "spam_left", "spam_right", "hold_left", "hold_right", "spam_key", "hold_key")  # as listed: presets first
-BIND_ACTION_NAMES = ("Play a preset or recording", "Spam left click", "Spam right click", "Hold left click", "Hold right click",
+BIND_ACTION_NAMES = ("Play one of my macros", "Spam left click", "Spam right click", "Hold left click", "Hold right click",
                      "Spam a key", "Hold a key")
 
 
@@ -699,7 +699,7 @@ def _bind_target(b):
 def bind_title(b):
     """"R:  spam left click while held\""""
     if b["action"] == "macro":
-        what = "play " + (_bind_target(b) if b.get("macro") else "a preset")
+        what = "play " + (_bind_target(b) if b.get("macro") else "a macro")
     else:
         what = ("spam " if bind_is_spam(b) else "tap " if b["mode"] == "once" else "hold ") + _bind_target(b)
     when = " while held" if b["mode"] == "held" else " (toggle)" if b["mode"] == "toggle" else ""
@@ -712,12 +712,12 @@ def bind_describe(b):
     if b["action"] == "macro":
         m = b.get("macro")
         if not m:
-            return "Pick a preset or recording from your suite (save them on the Presets page)."
+            return "Pick one of your saved macros (save them in My macros)."
         if b["mode"] == "held":
             return 'Holding %s plays "%s"; letting go stops it.' % (key, m)
         if b["mode"] == "toggle":
             return 'Pressing %s starts "%s". Press it again to stop.' % (key, m)
-        return 'Each press of %s starts "%s" (it runs as set up on the Presets page).' % (key, m)
+        return 'Each press of %s starts "%s" (it runs as you set it up).' % (key, m)
     every = float(b.get("every", 50))
     rate = " %s times a second" % (("%.1f" % (1000 / every)).rstrip("0").rstrip(".") if every >= 100 else "%d" % round(1000 / max(every, 1)))
     spam = bind_is_spam(b)

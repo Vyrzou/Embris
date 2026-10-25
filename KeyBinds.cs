@@ -30,7 +30,7 @@ namespace Embris
         public static readonly string[] ModeNames = { "While held", "Toggle: press to start, again to stop", "Once per press" };
         // The "Do" list, in the order it's shown (presets first); the numbers saved stay the BindAction values.
         public static readonly BindAction[] ActionOrder = { BindAction.PlayMacro, BindAction.SpamLeft, BindAction.SpamRight, BindAction.HoldLeft, BindAction.HoldRight, BindAction.SpamKey, BindAction.HoldKey };
-        public static readonly string[] ActionNames = { "Play a preset or recording", "Spam left click", "Spam right click", "Hold left click", "Hold right click", "Spam a key", "Hold a key" };
+        public static readonly string[] ActionNames = { "Play one of my macros", "Spam left click", "Spam right click", "Hold left click", "Hold right click", "Spam a key", "Hold a key" };
 
         public KeyBind Copy() { return (KeyBind)MemberwiseClone(); }
 
@@ -56,7 +56,7 @@ namespace Embris
         {
             get
             {
-                string what = Action == BindAction.PlayMacro ? "play " + (Macro == "" ? "a preset" : Target)
+                string what = Action == BindAction.PlayMacro ? "play " + (Macro == "" ? "a macro" : Target)
                     : (IsSpam ? "spam " : Mode == BindMode.Once ? "tap " : "hold ") + Target;
                 string when = Mode == BindMode.Held ? " while held" : Mode == BindMode.Toggle ? " (toggle)" : "";
                 return (On ? "" : "(off) ") + Ui.KeyName(Trigger) + ":  " + what + when;
@@ -69,10 +69,10 @@ namespace Embris
             string key = Ui.KeyName(Trigger);
             if (Action == BindAction.PlayMacro)
             {
-                if (Macro == "") return "Pick a preset or recording from your suite (save them on the Presets page).";
+                if (Macro == "") return "Pick one of your saved macros (save them in My macros).";
                 if (Mode == BindMode.Held) return "Holding " + key + " plays \"" + Macro + "\"; letting go stops it.";
                 if (Mode == BindMode.Toggle) return "Pressing " + key + " starts \"" + Macro + "\". Press it again to stop.";
-                return "Each press of " + key + " starts \"" + Macro + "\" (it runs as set up on the Presets page).";
+                return "Each press of " + key + " starts \"" + Macro + "\" (it runs as it's set up).";
             }
             string rate = IsSpam ? " " + (EveryMs > 0 ? (1000 / EveryMs).ToString(EveryMs >= 100 ? "0.#" : "0", CultureInfo.InvariantCulture) : "1000+") + " times a second" : "";
             string act = IsSpam ? "spams " + Target + rate : Mode == BindMode.Once ? "taps " + Target : "holds " + Target + " down";

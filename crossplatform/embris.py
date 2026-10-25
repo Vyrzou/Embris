@@ -699,9 +699,23 @@ class Bridge(QObject):
 # ---------------------------------------------------------------- main window
 
 class MainWindow(QMainWindow):
-    PAGES = ("Macro", "Presets", "Sequence editor", "Timeline editor", "Scripts", "Hotkeys", "Settings", "Themes && Colors", "Auto clicker", "Calibration", "Key binds")
-    NAV_ICONS = ("▤", "☰", "☷", "▥", "{ }", "⌨", "⚙", "◐", "◉", "⌖", "⊞")
-    NAV_ORDER = (0, 8, 10, 1, 2, 3, 9, 4, 5, 6, 7)  # sidebar order (page numbers): auto clicker and key binds under Macro, calibration after the editors
+    PAGES = ("Macro", "My macros", "Sequence editor", "Timeline editor", "Scripts", "Hotkeys", "Settings", "Themes && Colors", "Auto clicker", "Calibration", "Key binds", "Start here")
+    # What each page is for, shown when you hover it.
+    PAGE_ABOUT = ("Set up and run a macro: which app, what to press or click, how long",
+                  "Your saved macros: load them, give each a hotkey, see what they do",
+                  "Edit your recorded steps as a list",
+                  "Edit your recorded steps on a timeline (same steps as the Sequence editor)",
+                  "Macros as text files you can share (advanced)",
+                  "Change the keys that run, record and calibrate",
+                  "Tray, window, video background and updates",
+                  "Colors and backgrounds",
+                  "Click fast, without setting up a macro",
+                  "Line up every run from the same spot",
+                  "Make keys spam clicks, hold buttons or start a macro",
+                  "How Embris works, in four steps")
+    NAV_GROUPS = (("PLAY", (11, 0, 8, 10)), ("MAKE", (1, 2, 3, 4)), ("SETUP", (9, 5, 6, 7)))  # sidebar: play, make, setup
+    NAV_ICONS = ("▤", "☰", "☷", "▥", "{ }", "⌨", "⚙", "◐", "◉", "⌖", "⊞", "⌂")
+    NAV_ORDER = (11, 0, 8, 10, 1, 2, 3, 4, 9, 5, 6, 7)  # sidebar order (page numbers), as in NAV_GROUPS
 
     def __init__(self):
         super().__init__()
@@ -766,7 +780,10 @@ class MainWindow(QMainWindow):
         self.apply_theme()
         self.apply_pin()
         self.apply_sidebar()
-        self.show_page(0)
+        # The first time, open on Start here; after that, the Macro page.
+        self.show_page(0 if self.s.get("seen_guide") else 11)
+        if not self.s.get("seen_guide"):
+            self.set_setting("seen_guide", True)
         self.refresh_presets()
         self.new_release = None  # a newer version found by the last check
         self.update_reply = None
@@ -937,18 +954,25 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.nav = QButtonGroup(self)
         self.nav.setExclusive(True)
-        for i in self.NAV_ORDER:
-            name = self.PAGES[i]
-            b = QPushButton(self.NAV_ICONS[i] + "   " + name.replace("&&", "&&"))
-            b.setToolTip(name.replace("&&", "&"))
-            b.setObjectName("nav")
-            b.setCheckable(True)
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(lambda _=False, n=i: self.show_page(n))
-            self.nav.addButton(b, i)
-            sv.addWidget(b)
+        self.side_heads = []
+        for head, group in self.NAV_GROUPS:
+            h_label = label(head, "faint")
+            h_label.setStyleSheet("font-size: 10px; font-weight: 600; padding: 6px 0 0 12px;")
+            self.side_heads.append(h_label)
+            sv.addWidget(h_label)
+            for i in group:
+                name = self.PAGES[i]
+                b = QPushButton(self.NAV_ICONS[i] + "   " + name.replace("&&", "&&"))
+                b.setToolTip("%s: %s" % (name.replace("&&", "&"), self.PAGE_ABOUT[i]))
+                b.setObjectName("nav")
+                b.setCheckable(True)
+                b.setCursor(Qt.CursorShape.PointingHandCursor)
+                b.clicked.connect(lambda _=False, n=i: self.show_page(n))
+                self.nav.addButton(b, i)
+                sv.addWidget(b)
         sv.addStretch()
-        self.side_footer = [label("Settings save automatically.", "sub"), label("Embris v" + VERSION, "faint")]
+        self.side_footer = [label("", "sub"), label("Embris v" + VERSION, "faint")]
+        self.side_footer[0].hide()
         for w in self.side_footer:
             sv.addWidget(w)
         h.addWidget(side)
@@ -998,6 +1022,7 @@ class MainWindow(QMainWindow):
         self.build_auto_clicker()
         self.build_calibration()
         self.build_key_binds()
+        self.build_start()
 
     def build_macro(self):
         v = self.page("Macro", "Pick the game, what to do, and how long. Then press Run.")
@@ -1129,13 +1154,13 @@ class MainWindow(QMainWindow):
         self.card_click = c
 
     def build_presets(self):
-        v = self.page("Presets", "Your macro suite: save macros, give each its own hotkey, or build one step by step.")
+        v = self.page("My macros", "Save the macro you set up, give each one a hotkey, and load or run them any time.")
         row = QHBoxLayout()
         row.setSpacing(16)
         v.addLayout(row, 1)
 
-        c, g = self.card("Macro suite")
-        g.addWidget(label("Macro name", "sub"), 1, 0, 1, 2)
+        c, g = self.card("Saved macros")
+        g.addWidget(label("Save what's set up now as", "sub"), 1, 0, 1, 2)
         self.e_preset = QLineEdit()
         self.e_preset.setPlaceholderText("e.g. Anti-AFK")
         self.e_preset.setMinimumHeight(34)
@@ -1259,6 +1284,23 @@ class MainWindow(QMainWindow):
         g.setColumnStretch(1, 1)
         row.addWidget(c, 1)
         self.card_builder = c
+        # The step builder did the same as the sequence editor, which was confusing: it stays out of
+        # sight, and its place shows what the selected macro does instead.
+        c.hide()
+        c, g = self.card("About this macro")
+        self.macro_name = label("", "cardTitle")
+        g.addWidget(self.macro_name, 1, 0, 1, 2)
+        self.macro_about = label("", "sub", wrap=True)
+        self.macro_about.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        g.addWidget(self.macro_about, 2, 0, 1, 2)
+        self.macro_run = push("▶  Run it", "primary", self.run_selected_macro)
+        self.macro_edit = push("Edit steps", slot=self.edit_selected_macro)
+        g.addWidget(self.macro_run, 3, 0)
+        g.addWidget(self.macro_edit, 3, 1)
+        g.setRowStretch(2, 1)
+        g.setColumnStretch(0, 1)
+        g.setColumnStretch(1, 1)
+        row.addWidget(c, 1)
 
     # ----- sequence editor & timeline editor
     # Two pages that edit the same sequence: a table of steps, and a timeline with a track per key.
@@ -1278,7 +1320,7 @@ class MainWindow(QMainWindow):
         sub_row.setSpacing(6)
         sub_row.addWidget(summary)
         open_btn = push("📂", "chip", lambda: self.show_open_preset_menu(open_btn))
-        open_btn.setToolTip("Open a preset or recording from your suite to edit it")
+        open_btn.setToolTip("Open one of your saved macros to edit it")
         clear_btn = push("🗑", "chip", self.clear_editor_sequence)
         clear_btn.setToolTip("Clear the sequence (Ctrl+Z brings it back)")
         for b in (open_btn, clear_btn):
@@ -1303,7 +1345,7 @@ class MainWindow(QMainWindow):
         rec.setMinimumWidth(150)
         self.record_texts[rec] = "●  " + record_text
         save = push("Save sequence", "primary", self.save_sequence_to_suite)
-        save.setToolTip("Save this sequence as a macro in your suite (see Presets)")
+        save.setToolTip("Save these steps as a macro in My macros")
         head.addWidget(rec, 0, 1)
         head.addWidget(save, 0, 2)
         use = Toggle("Play this sequence when the macro runs", self.s["use_sequence"])
@@ -1591,12 +1633,12 @@ class MainWindow(QMainWindow):
         self.script_macros.setMinimumWidth(160)
         bar.addWidget(self.script_macros, 2)
         edit = push("Edit", slot=self.script_from_macro)
-        edit.setToolTip("Show the chosen macro from your suite as a script")
+        edit.setToolTip("Show one of your saved macros as a script")
         bar.addWidget(edit)
         bar.addWidget(push("New", slot=lambda: self.script_box.setPlainText(emb_script.TEMPLATE)))
         bar.addWidget(push("Open", slot=self.open_script_dialog))
         bar.addWidget(push("Save file", slot=self.save_script_dialog))
-        bar.addWidget(push("+  Add to suite", "primary", lambda: self.add_script_to_suite()))
+        bar.addWidget(push("+  Add to My macros", "primary", lambda: self.add_script_to_suite()))
         g.addLayout(bar, 1, 0)
         self.script_box = QPlainTextEdit()
         self.script_box.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
@@ -1640,10 +1682,10 @@ class MainWindow(QMainWindow):
         self.card_hotkey = c
 
         c, g = self.card("Recording")
-        self.t_autosave = Toggle("Save each recording to my macro suite when I stop", self.s.get("auto_save_recordings", False))
+        self.t_autosave = Toggle("Save each recording to My macros when I stop", self.s.get("auto_save_recordings", False))
         self.t_autosave.toggled.connect(lambda on: self.set_setting("auto_save_recordings", bool(on)))
         g.addWidget(self.t_autosave, 1, 0, 1, 3)
-        g.addWidget(label("Each take is saved as \"Recording\" with the date and time. Find them on the Presets page.", "sub", wrap=True), 2, 0, 1, 3)
+        g.addWidget(label("Each take is saved as \"Recording\" with the date and time. Find them in My macros.", "sub", wrap=True), 2, 0, 1, 3)
         # Frame sync: match Roblox's frame rate so every input lands on the same frame each replay.
         g.addWidget(label("Frame sync"), 3, 0)
         self.frame_sync_box = QComboBox()
@@ -2735,11 +2777,107 @@ class MainWindow(QMainWindow):
         self.update_hotstrings()
         self.script_macros.clear()
         self.script_macros.addItems([p["name"] for p in self.presets])
+        self.show_macro_details()
 
     def on_preset_selected(self, row):
         if 0 <= row < len(self.presets):
             self.e_preset.setText(self.presets[row]["name"])
             self.preset_hotkey.set_key(self.presets[row].get("hotkey"))
+        self.show_macro_details()
+
+    @staticmethod
+    def seconds_text(sec):
+        sec = float(sec)
+        return ("%g sec" % round(sec, 3)) if sec < 60 else ("%g min" % round(sec / 60, 1)) if sec < 3600 else ("%g hours" % round(sec / 3600, 2))
+
+    def show_macro_details(self):
+        """Explains the selected macro in plain words: what it does, how long, where, and its hotkey."""
+        if not hasattr(self, "macro_about"):
+            return
+        row = self.preset_list.currentRow()
+        ok = 0 <= row < len(self.presets)
+        self.macro_run.setEnabled(ok)
+        self.macro_edit.setEnabled(ok)
+        if not ok:
+            self.macro_name.setText("No macros saved yet" if not self.presets else "Pick a macro")
+            self.macro_about.setText("Set up a macro on the Macro page (or record one), then type a name on the left and click Save. "
+                                     "It'll show here, ready to load, run, or give its own hotkey." if not self.presets else
+                                     "Click a macro on the left to see what it does. Double-click to load it.")
+            return
+        p = self.presets[row]
+        m = dict(core.DEFAULTS)
+        m.update(p.get("settings") or {})
+        lines = []
+        seq = m.get("sequence") or []
+        if m.get("use_sequence") and seq:
+            actions = sum(1 for st in seq if st.get("t") in ("kd", "md", "tx"))
+            secs = sum(int(st.get("d", 0)) for st in seq) / 1000.0
+            moves = any(st.get("t") == "mv" for st in seq)
+            lines.append("Plays a recording: %d key presses and clicks%s, %.1f s long%s." % (
+                actions, ", plus camera movement" if moves else "", secs, (", at %gx speed" % float(m.get("speed", 1))) if float(m.get("speed", 1)) != 1 else ""))
+        else:
+            what = []
+            if m.get("press_key"):
+                what.append("presses " + key_label(m.get("key")) + (" (held %d ms)" % int(m.get("hold_ms", 0)) if int(m.get("hold_ms", 0)) > 100 else ""))
+            if m.get("click"):
+                what.append("%s at %d, %d" % ("right-clicks" if m.get("right_click") else "clicks", int(m.get("x", 0)), int(m.get("y", 0))))
+            joined = " and ".join(what)
+            lines.append((joined[0].upper() + joined[1:] + ".") if what else "Doesn't do anything yet.")
+        mode, times = int(m.get("run_mode", 0)), int(m.get("run_times", 10))
+        if mode == 0:
+            lines.append("Repeats every %s until you stop it." % self.seconds_text(m.get("interval", 60)))
+        elif times <= 1 or mode == 2:
+            lines.append("Runs once.")
+        else:
+            lines.append("Runs %d times, every %s." % (times, self.seconds_text(m.get("interval", 60))))
+        lines.append("In %s%s" % (m.get("app_name", ""), ", bringing it to the front each time." if m.get("focus_app") else "."))
+        lines.append(("Hotkey: %s. Press it anywhere to start or stop this macro." % key_label(p["hotkey"])) if p.get("hotkey")
+                     else "No hotkey yet. Set one on the left to start it from anywhere.")
+        self.macro_name.setText(p["name"])
+        self.macro_about.setText("\n\n".join(lines))
+
+    def run_selected_macro(self):
+        if self.preset_list.currentRow() < 0:
+            return
+        if self.running:
+            self.stop()
+        self.load_preset()
+        self.toggle()
+
+    def edit_selected_macro(self):
+        if self.preset_list.currentRow() < 0 or self.running:
+            return
+        self.load_preset()
+        self.show_page(2)
+
+    # ----- start here: how Embris works, with a button to each place
+
+    def build_start(self):
+        v = self.page("Start here", "Embris presses keys and clicks for you, in Roblox or any app. Four steps:")
+        c, g = self.card("Make a macro")
+        run, rec = key_label(self.s["hotkey"]), key_label(self.s["record_hotkey"])
+        steps = (("Pick the game and what to do", "On the Macro page: press a key, click, or play something you recorded.", "Macro page", 0),
+                 ("Or record yourself", "Click into the game, press %s, play, press %s again. Embris copies it." % (rec, rec), "See the steps", 2),
+                 ("Run it", "Press %s anywhere (or Run macro below). It repeats until you stop it." % run, "How long", 0),
+                 ("Keep it", "Save it in My macros to load it later and give it its own hotkey.", "My macros", 1))
+        for n, (title, text, button, page) in enumerate(steps):
+            num = label(str(n + 1), "title")
+            g.addWidget(num, 1 + n * 2, 0, 2, 1)
+            g.addWidget(label(title, "strong"), 1 + n * 2, 1)
+            g.addWidget(label(text, "sub", wrap=True), 2 + n * 2, 1)
+            g.addWidget(push(button, slot=lambda _=False, pg=page: self.show_page(pg)), 1 + n * 2, 2, 2, 1)
+        g.setColumnStretch(1, 1)
+        v.addWidget(c)
+        c, g = self.card("Other tools")
+        for n, (title, text, page) in enumerate((("Auto clicker", "Click fast without setting anything else up.", 8),
+                                                ("Key binds", "Make a key spam clicks, hold the mouse, or start one of your macros.", 10),
+                                                ("Calibration", "Start every run from exactly the same spot.", 9))):
+            g.addWidget(label(title, "strong"), 1 + n, 0)
+            g.addWidget(label(text, "sub", wrap=True), 1 + n, 1)
+            g.addWidget(push("Open", slot=lambda _=False, pg=page: self.show_page(pg)), 1 + n, 2)
+        g.setColumnStretch(1, 1)
+        v.addWidget(c)
+        v.addStretch()
 
     def save_presets(self):
         core.save_json(core.PRESETS_FILE, self.presets)
@@ -2765,7 +2903,7 @@ class MainWindow(QMainWindow):
             index = len(self.presets) - 1
         self.save_presets()
         self.preset_list.setCurrentRow(index)
-        self.set_status("ready", 'Saved "%s"' % name, "Load it any time from the Presets page.")
+        self.set_status("ready", 'Saved "%s"' % name, "Load it any time from My macros.")
 
     def load_preset(self):
         row = self.preset_list.currentRow()
@@ -2791,14 +2929,14 @@ class MainWindow(QMainWindow):
         """The editors' open button: pick a preset or recording from the suite to edit."""
         menu = QMenu(self)
         if not self.presets:
-            menu.addAction("No presets yet: save one on the Presets page").setEnabled(False)
+            menu.addAction("Nothing saved yet: save one in My macros").setEnabled(False)
         for n, p in enumerate(self.presets):
             menu.addAction(p["name"], lambda n=n: self.open_preset_in_editor(n))
         menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
 
     def open_preset_in_editor(self, n):
         if self.running:
-            self.set_status("problem", "Stop the macro first", "Then open the preset.")
+            self.set_status("problem", "Stop the macro first", "Then open the macro.")
             return
         self.preset_list.setCurrentRow(n)
         self.load_preset()
@@ -2854,7 +2992,7 @@ class MainWindow(QMainWindow):
         """A key bind that plays a preset or recording from the suite: "start", "stop" or "toggle" it."""
         i = next((n for n, p in enumerate(self.presets) if p.get("name", "").lower() == name.lower()), -1)
         if i < 0:
-            self.set_status("problem", '"%s" isn\'t in your suite' % name, "Pick another preset for that key bind.")
+            self.set_status("problem", '"%s" isn\'t in My macros' % name, "Pick another macro for that key bind.")
             return
         running_this = self.running and self.suite_preset == i
         if command == "stop":
@@ -3317,7 +3455,7 @@ class MainWindow(QMainWindow):
         self.last_preset_name = name
         self.save_presets()
         self.refresh_sequence()
-        self.set_status("ready", 'Saved "%s" to your macro suite' % name, "Rename it or give it a hotkey on the Presets page.")
+        self.set_status("ready", 'Saved "%s" to My macros' % name, "Rename it or give it a hotkey on the Presets page.")
 
     # ----- scripts (.emb)
 
@@ -3333,7 +3471,7 @@ class MainWindow(QMainWindow):
                 parts.append("%d hotstrings" % len(r.hotstrings))
             if r.hotkey:
                 parts.append("hotkey " + key_label(r.hotkey))
-            self.script_status.setText(", ".join(parts) + ". Click Add to suite to use it.")
+            self.script_status.setText(", ".join(parts) + ". Click Add to My macros to use it.")
             self.script_status.setStyleSheet("")
         return r
 
@@ -3362,9 +3500,9 @@ class MainWindow(QMainWindow):
         self.save_presets()
         if select:
             self.preset_list.setCurrentRow(i)
-        self.set_status("ready", 'Added "%s" to your macro suite' % preset["name"],
+        self.set_status("ready", 'Added "%s" to My macros' % preset["name"],
                         ("Press %s anywhere to run it." % key_label(preset["hotkey"])) if preset.get("hotkey")
-                        else "Load it from the Presets page.")
+                        else "Load it from My macros.")
         return True
 
     def open_script_dialog(self):
@@ -3391,7 +3529,7 @@ class MainWindow(QMainWindow):
             if add_to_suite:
                 self.add_script_to_suite()
             else:
-                self.set_status("ready", "Opened " + os.path.basename(path), "Check it, then click Add to suite to use it.")
+                self.set_status("ready", "Opened " + os.path.basename(path), "Check it, then click Add to My macros to use it.")
         except OSError as e:
             self.set_status("problem", "Couldn't open that file", str(e))
 
@@ -3492,7 +3630,7 @@ class MainWindow(QMainWindow):
     def apply_sidebar(self):
         c = bool(self.s.get("sidebar_collapsed"))
         self.side.setFixedWidth(64 if c else 220)
-        for w in [self.side_logo, self.side_name, self.pin_btn] + self.side_footer:
+        for w in [self.side_logo, self.side_name, self.pin_btn, self.side_footer[1]] + self.side_heads:
             w.setVisible(not c)
         for i, b in enumerate(self.nav.buttons()):
             idx = self.nav.id(b)
@@ -3507,7 +3645,7 @@ class MainWindow(QMainWindow):
     def link_file_type(self):
         ok = core.register_file_type()
         self.set_status("ready" if ok else "problem", ".emb files now open with Embris" if ok else "Couldn't link .emb files",
-                        "Double-click a macro file to add it to your suite." if ok else "xdg-mime is needed (part of xdg-utils).")
+                        "Double-click a macro file to add it to My macros." if ok else "xdg-mime is needed (part of xdg-utils).")
     def add_step(self):
         seq, kind = self.s["sequence"], self.step_group.checkedId()
         if kind == 0:
@@ -3590,7 +3728,7 @@ class MainWindow(QMainWindow):
             self.refresh_sequence()
         self.update_status()
         if saved:
-            self.set_status("ready", 'Saved "%s"' % saved, "It's in your macro suite on the Presets page.")
+            self.set_status("ready", 'Saved "%s"' % saved, "It's in My macros.")
 
     # ----- running
 

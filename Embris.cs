@@ -346,6 +346,7 @@ namespace Embris
         public bool AutoSaveRecordings = false; // every recording also goes into the macro suite
         public int RunMode = 0;       // how long the macro runs: 0 until stopped, 1 a number of times, 2 once
         public int RunTimes = 10;     // for RunMode 1
+        public bool SeenGuide = false; // the Start here page was shown once (on the first start)
         public bool BindsOn = true;   // key binds active
         public string Binds = "";     // key binds (see KeyBind.SaveAll)
         public int FrameSync = 0;   // playback lines inputs up with the game's frames: 0 off, -1 the display's refresh rate, else that frame rate
@@ -405,7 +406,7 @@ namespace Embris
         public void Save()
         {
             var lines = MacroLines();
-            lines.AddRange(new[] { "Hotkey=" + (int)Hotkey, "RecordHotkey=" + (int)RecordHotkey, "Pinned=" + Pinned, "CloseToTray=" + CloseToTray, "SidebarCollapsed=" + SidebarCollapsed, "BgFile=" + BgFile, "BgSource=" + BgSource, "BgDim=" + BgDim, "BgDecoder=" + BgDecoder, "BgFps=" + BgFps, "BgGlass=" + BgGlass, "BgCard=" + BgCard, "SnapToKeys=" + SnapToKeys, "AutoSaveRecordings=" + AutoSaveRecordings, "FrameSync=" + FrameSync, "BindsOn=" + BindsOn, "Binds=" + Binds, "WindowOpacity=" + WindowOpacity, "ThemeName=" + ThemeName, "ThemeColors=" + ThemeColors,
+            lines.AddRange(new[] { "Hotkey=" + (int)Hotkey, "RecordHotkey=" + (int)RecordHotkey, "Pinned=" + Pinned, "CloseToTray=" + CloseToTray, "SidebarCollapsed=" + SidebarCollapsed, "BgFile=" + BgFile, "BgSource=" + BgSource, "BgDim=" + BgDim, "BgDecoder=" + BgDecoder, "BgFps=" + BgFps, "BgGlass=" + BgGlass, "BgCard=" + BgCard, "SnapToKeys=" + SnapToKeys, "AutoSaveRecordings=" + AutoSaveRecordings, "FrameSync=" + FrameSync, "BindsOn=" + BindsOn, "SeenGuide=" + SeenGuide, "Binds=" + Binds, "WindowOpacity=" + WindowOpacity, "ThemeName=" + ThemeName, "ThemeColors=" + ThemeColors,
                 "ClickHotkey=" + (int)ClickHotkey, "OverlayHotkey=" + (int)OverlayHotkey, "GhostOpacity=" + GhostOpacity, "CustomCursor=" + CustomCursor, "CursorSize=" + CursorSize, "ClickIntervalMs=" + ClickIntervalMs.ToString(Inv), "ClickButton=" + ClickButton, "ClickDouble=" + ClickDouble,
                 "ClickTimes=" + ClickTimes, "ClickFixed=" + ClickFixed, "ClickAtX=" + ClickAtX, "ClickAtY=" + ClickAtY });
             File.WriteAllLines(FilePath, lines);
@@ -461,6 +462,7 @@ namespace Embris
                 if (d.ContainsKey("SnapToKeys")) SnapToKeys = bool.Parse(d["SnapToKeys"]);
                 if (d.ContainsKey("AutoSaveRecordings")) AutoSaveRecordings = bool.Parse(d["AutoSaveRecordings"]);
                 if (d.ContainsKey("BindsOn")) BindsOn = bool.Parse(d["BindsOn"]);
+                if (d.ContainsKey("SeenGuide")) SeenGuide = bool.Parse(d["SeenGuide"]);
                 if (d.ContainsKey("Binds")) Binds = d["Binds"];
                 if (d.ContainsKey("FrameSync")) FrameSync = Math.Max(-1, Math.Min(1000, int.Parse(d["FrameSync"])));
                 if (d.ContainsKey("WindowOpacity")) WindowOpacity = Math.Max(20, Math.Min(100, int.Parse(d["WindowOpacity"])));
@@ -953,10 +955,10 @@ namespace Embris
         NumberBox pickX, pickY;
         Action pickDone;
 
-        Box[] pages = new Box[11];
-        NavButton[] navs = new NavButton[11];
-        // Sidebar order (page numbers): the auto clicker and key binds under Macro, calibration after the editors.
-        static readonly int[] NavOrder = { 0, 8, 10, 1, 2, 3, 9, 4, 5, 6, 7 };
+        Box[] pages = new Box[12];
+        NavButton[] navs = new NavButton[12];
+        // Sidebar order (page numbers), as grouped in NavGroups: play, make, setup.
+        static readonly int[] NavOrder = { 11, 0, 8, 10, 1, 2, 3, 4, 9, 5, 6, 7 };
         Box cardTarget, cardTiming, cardKey, cardClick, cardHotkey, cardSaved, cardBuilder;
         Box[] stepPanels = new Box[3];
         Dropdown cboTarget, cboMode;
@@ -1008,6 +1010,7 @@ namespace Embris
             BuildAutoClickerPage();
             BuildCalibrationPage();
             BuildKeyBindsPage();
+            BuildStartPage();
             BuildMini();
 
             actionTimer.Tick += (s, e) => DoAction();
@@ -1077,7 +1080,9 @@ namespace Embris
             Theme.Changed += OnThemeChanged;
             ApplyChrome();
             ApplyPin();
-            ShowPage(0);
+            // The first time, open on Start here; after that, the Macro page.
+            ShowPage(settings.SeenGuide ? 0 : 11);
+            if (!settings.SeenGuide) { settings.SeenGuide = true; settings.Save(); }
             RefreshTargets();
             RefreshPresetList();
             UpdateIdleEnabled();
@@ -1301,18 +1306,39 @@ namespace Embris
             btnPin = Add(side, new RoundButton { Style = BtnStyle.Chip, PinIcon = true, Text = "" }, 172, 24, 34, 32);
             btnPin.Click += (s, e) => { settings.Pinned = !settings.Pinned; settings.Save(); ApplyPin(); };
 
-            string[] names = { "Macro", "Presets", "Sequence editor", "Timeline editor", "Scripts", "Hotkeys", "Settings", "Themes & Colors", "Auto clicker", "Calibration", "Key binds" };
-            string[] icons = { "\uE8FD", "\uE8F1", "\uE179", "\uE7C4", "\uE943", "\uE765", "\uE713", "\uE790", "\uE962", "\uE1D2", "\uE7FC" };
+            string[] names = { "Macro", "My macros", "Sequence editor", "Timeline editor", "Scripts", "Hotkeys", "Settings", "Themes & Colors", "Auto clicker", "Calibration", "Key binds", "Start here" };
+            // What each page is for, shown when you hover it.
+            string[] about = {
+                "Set up and run a macro: which app, what to press or click, how long",
+                "Your saved macros: load them, give each a hotkey, see what they do",
+                "Edit your recorded steps as a list",
+                "Edit your recorded steps on a timeline (same steps as the Sequence editor)",
+                "Macros as text files you can share (advanced)",
+                "Change the keys that run, record and calibrate",
+                "Tray, window, video background and updates",
+                "Colors and backgrounds",
+                "Click fast, without setting up a macro",
+                "Line up every run from the same spot",
+                "Make keys spam clicks, hold buttons or start a macro",
+                "How Embris works, in four steps" };
+            sideHeads = new TextLabel[3];
+            string[] heads = { "PLAY", "MAKE", "SETUP" };
+            for (int i = 0; i < 3; i++) sideHeads[i] = Add(side, new TextLabel { Text = heads[i], Faint = true, Font = Ui.Semi(7.5f) }, 24, 84, 180, 18);
+            string[] icons = { "\uE8FD", "\uE8F1", "\uE179", "\uE7C4", "\uE943", "\uE765", "\uE713", "\uE790", "\uE962", "\uE1D2", "\uE7FC", "\uE80F" };
             for (int i = 0; i < names.Length; i++)
             {
                 int n = i;
-                navs[i] = Add(side, new NavButton { Text = names[i], Icon = icons[i] }, 12, 84 + Array.IndexOf(NavOrder, i) * 46, 196, 42);
+                navs[i] = Add(side, new NavButton { Text = names[i], Icon = icons[i] }, 12, 84, 196, 34);
                 navs[i].Click += (s, e) => ShowPage(n);
-                tips.SetToolTip(navs[i], names[i]);
+                tips.SetToolTip(navs[i], names[i] + ": " + about[i]);
             }
-            sideFooter1 = Add(side, new TextLabel { Text = "Settings save automatically.", Sub = true, Font = Ui.F(8.5f) }, 20, 590, 190, 18);
-            sideFooter2 = Add(side, new TextLabel { Text = "Embris v" + Ui.Version, Faint = true, Font = Ui.F(8f) }, 20, 610, 190, 18);
+            sideFooter1 = Add(side, new TextLabel { Text = "", Sub = true, Font = Ui.F(8.5f), Visible = false }, 20, 590, 190, 18);
+            sideFooter2 = Add(side, new TextLabel { Text = "Embris v" + Ui.Version, Faint = true, Font = Ui.F(8f) }, 20, 612, 190, 18);
         }
+
+        TextLabel[] sideHeads;
+        // The sidebar's groups (page numbers, top to bottom): things you play, things you make, setup.
+        static readonly int[][] NavGroups = { new[] { 11, 0, 8, 10 }, new[] { 1, 2, 3, 4 }, new[] { 9, 5, 6, 7 } };
 
         Box sidebar;
         Logo sideLogo;
@@ -1339,12 +1365,22 @@ namespace Embris
                 btnCollapse.SetBounds(Ui.S(134), Ui.S(24), Ui.S(34), Ui.S(32));
                 btnPin.SetBounds(Ui.S(172), Ui.S(24), Ui.S(34), Ui.S(32));
             }
-            int top = c ? Ui.S(146) : Ui.S(84);
-            for (int i = 0; i < navs.Length; i++)
-                navs[i].SetBounds(c ? Ui.S(8) : Ui.S(12), top + Array.IndexOf(NavOrder, i) * Ui.S(c ? 44 : 46), c ? Ui.S(48) : Ui.S(196), Ui.S(c ? 40 : 42));
-            sideFooter1.Visible = sideFooter2.Visible = !c;
-            sideFooter1.SetBounds(Ui.S(20), h - Ui.S(50), Ui.S(190), Ui.S(18));
-            sideFooter2.SetBounds(Ui.S(20), h - Ui.S(30), Ui.S(190), Ui.S(18));
+            // Each group gets a small heading (a gap when collapsed), then its pages.
+            int y = c ? Ui.S(140) : Ui.S(72);
+            for (int gi = 0; gi < NavGroups.Length; gi++)
+            {
+                sideHeads[gi].Visible = !c;
+                sideHeads[gi].SetBounds(Ui.S(24), y, Ui.S(180), Ui.S(18));
+                y += Ui.S(c ? 8 : 20);
+                foreach (int i in NavGroups[gi])
+                {
+                    navs[i].SetBounds(c ? Ui.S(8) : Ui.S(12), y, c ? Ui.S(48) : Ui.S(196), Ui.S(34));
+                    y += Ui.S(c ? 37 : 38);
+                }
+                y += Ui.S(c ? 4 : 6);
+            }
+            sideFooter2.Visible = !c;
+            sideFooter2.SetBounds(Ui.S(20), h - Ui.S(26), Ui.S(190), Ui.S(18));
             tips.SetToolTip(btnCollapse, c ? "Show the full sidebar" : "Collapse the sidebar");
         }
 
@@ -1663,10 +1699,10 @@ namespace Embris
 
         void BuildPresetsPage()
         {
-            var p = Page(1, "Presets", "Your macro suite: save macros, give each its own hotkey, or build one step by step.");
+            var p = Page(1, "My macros", "Save the macro you set up, give each one a hotkey, and load or run them any time.");
 
-            cardSaved = Tagged(Card(p, "Macro suite", 32, 100, 330, 436), VFill);
-            Label(cardSaved, "Macro name", 18, 48, 294);
+            cardSaved = Tagged(Card(p, "Saved macros", 32, 100, 330, 436), VFill);
+            Label(cardSaved, "Save what's set up now as", 18, 48, 294);
             txtPresetName = Add(cardSaved, new TextField { Placeholder = "e.g. Anti-AFK" }, 18, 70, 196, 34);
             var save = Add(cardSaved, new RoundButton { Style = BtnStyle.Primary, Icon = "", Text = "Save" }, 222, 70, 90, 34);
             save.Click += (s, e) => SavePreset();
@@ -1677,6 +1713,7 @@ namespace Embris
                 if (i >= 0) txtPresetName.Text = presets[i].Name;
                 presetHotkeyBox.Key = i >= 0 ? presets[i].Hotkey : Keys.None;
                 presetHotkeyBox.Enabled = presetHotkeyClear.Enabled = i >= 0;
+                ShowMacroDetails();
             };
             // Each macro can have its own hotkey: press it anywhere to load and run that macro.
             Add(cardSaved, Tagged(new TextLabel { Text = "Hotkey", Sub = true, Font = Ui.F(9f) }, AtBottom), 18, 347, 54, 20);
@@ -1748,6 +1785,78 @@ namespace Embris
             undo.Click += (s, e) => RemoveLastStep();
             var clear = Add(cardBuilder, Tagged(new RoundButton { Icon = "", Text = "Clear" }, AtBottom), 172, 382, 140, 38);
             clear.Click += (s, e) => { sequence.Clear(); SequenceChanged(); };
+            // The step builder did the same as the sequence editor, which was confusing: it stays out of
+            // sight, and its place shows what the selected macro does instead.
+            cardBuilder.Visible = false;
+
+            var info = Tagged(Card(p, "About this macro", 378, 100, 330, 436), VFill);
+            lblMacroName = Add(info, new TextLabel { Font = Ui.Semi(12f) }, 18, 44, 294, 26);
+            lblMacroAbout = Add(info, Tagged(new TextLabel { Sub = true, Wrap = true, Font = Ui.F(9.5f) }, VFill), 18, 76, 294, 256);
+            macroRun = Add(info, Tagged(new RoundButton { Style = BtnStyle.Primary, Icon = "", Text = "Run it" }, AtBottom), 18, 382, 140, 38);
+            macroRun.Click += (s, e) =>
+            {
+                if (presetList.SelectedIndex < 0) return;
+                if (running) Stop();
+                LoadPreset();
+                Toggle();
+            };
+            macroEdit = Add(info, Tagged(new RoundButton { Icon = "", Text = "Edit steps" }, AtBottom), 172, 382, 140, 38);
+            macroEdit.Click += (s, e) => { if (presetList.SelectedIndex < 0 || running) return; LoadPreset(); ShowPage(2); };
+            tips.SetToolTip(macroEdit, "Load it and open its steps in the Sequence editor");
+            ShowMacroDetails();
+        }
+
+        TextLabel lblMacroName, lblMacroAbout;
+        RoundButton macroRun, macroEdit;
+
+        static string Seconds(decimal s)
+        {
+            return s < 60 ? s.ToString("0.###") + " sec" : s < 3600 ? (s / 60).ToString("0.#") + " min" : (s / 3600).ToString("0.##") + " hours";
+        }
+
+        // Explains the selected macro in plain words: what it does, how long, where, and its hotkey.
+        void ShowMacroDetails()
+        {
+            if (lblMacroAbout == null) return;
+            int i = presetList.SelectedIndex;
+            macroRun.Enabled = macroEdit.Enabled = i >= 0 && i < presets.Count;
+            if (i < 0 || i >= presets.Count)
+            {
+                lblMacroName.Text = presets.Count == 0 ? "No macros saved yet" : "Pick a macro";
+                lblMacroAbout.Text = presets.Count == 0
+                    ? "Set up a macro on the Macro page (or record one), then type a name on the left and click Save. It'll show here, ready to load, run, or give its own hotkey."
+                    : "Click a macro on the left to see what it does. Double-click to load it.";
+                return;
+            }
+            var pr = presets[i];
+            var m = new Settings();
+            m.Apply(Settings.ParseLines(pr.Lines));
+            var lines = new List<string>();
+            var steps = RecStep.Parse(m.Recording);
+            if (m.UseRecording && steps.Count > 0)
+            {
+                int actions = 0, ms = 0;
+                bool moves = false;
+                foreach (var st in steps) { ms += st.Delay; if (st.Kind == 0 || st.Kind == 2 || st.Kind == 6) actions++; if (st.Kind == 5) moves = true; }
+                lines.Add("Plays a recording: " + actions + " key press" + (actions == 1 ? "" : "es") + " and clicks" + (moves ? ", plus camera movement" : "") +
+                          ", " + (ms / 1000.0).ToString("0.0") + " s long" + (m.Speed != 1 ? ", at " + m.Speed.ToString("0.##") + "x speed" : "") + ".");
+            }
+            else
+            {
+                var what = new List<string>();
+                if (m.PressKey) what.Add("presses " + Ui.KeyName(m.ActionKey) + (m.HoldMs > 100 ? " (held " + m.HoldMs + " ms)" : ""));
+                if (m.ClickEnabled) what.Add((m.RightClick ? "right-clicks" : "clicks") + " at " + m.ClickX + ", " + m.ClickY);
+                string joined = string.Join(" and ", what.ToArray());
+                lines.Add(what.Count == 0 ? "Doesn't do anything yet." : char.ToUpper(joined[0]) + joined.Substring(1) + ".");
+            }
+            if (m.RunMode == 0) lines.Add("Repeats every " + Seconds(m.IntervalSec) + " until you stop it.");
+            else if (m.RunTimes <= 1 || m.RunMode == 2) lines.Add("Runs once.");
+            else lines.Add("Runs " + m.RunTimes + " times, every " + Seconds(m.IntervalSec) + ".");
+            lines.Add("In " + m.TargetProcess + (m.Mode == 1 ? ", switching to it for a moment each time." : ", in the background."));
+            lines.Add(pr.Hotkey != Keys.None ? "Hotkey: " + Ui.KeyName(pr.Hotkey) + ". Press it anywhere to start or stop this macro."
+                                             : "No hotkey yet. Set one on the left to start it from anywhere.");
+            lblMacroName.Text = pr.Name;
+            lblMacroAbout.Text = string.Join("\n\n", lines.ToArray());
         }
 
         // ---------- scripts page: macros as text (.emb), plus AutoHotkey hotstring files ----------
@@ -1765,7 +1874,7 @@ namespace Embris
             scriptMacros = Add(c, new Dropdown { Font = Ui.F(9f) }, 18, 46, 170, 34);
             scriptMacros.Opening += (s, e) => FillScriptMacros();
             var edit = Add(c, new RoundButton { Text = "Edit" }, 194, 46, 60, 34);
-            tips.SetToolTip(edit, "Show the chosen macro from your suite as a script");
+            tips.SetToolTip(edit, "Show one of your saved macros as a script");
             edit.Click += (s, e) =>
             {
                 if (scriptMacros.SelectedIndex < 0 || scriptMacros.SelectedIndex >= presets.Count) return;
@@ -1777,7 +1886,7 @@ namespace Embris
             open.Click += (s, e) => OpenScriptDialog();
             var saveFile = Add(c, new RoundButton { Icon = "", Text = "Save file" }, 426, 46, 96, 34);
             saveFile.Click += (s, e) => SaveScriptDialog();
-            var add = Add(c, new RoundButton { Style = BtnStyle.Primary, Icon = "", Text = "Add to suite" }, 528, 46, 130, 34);
+            var add = Add(c, new RoundButton { Style = BtnStyle.Primary, Icon = "", Text = "Add to My macros" }, 528, 46, 130, 34);
             add.Click += (s, e) => AddScriptToSuite(true);
 
             scriptBox = Add(c, Tagged(new TextArea(), VFill), 18, 92, 640, 296);
@@ -1807,7 +1916,7 @@ namespace Embris
                 ? r.Errors[0] + (r.Errors.Count > 1 ? "   (+" + (r.Errors.Count - 1) + " more)" : "")
                 : "Looks good: \"" + r.Name + "\", " + steps + " step" + (steps == 1 ? "" : "s") +
                   (r.Hotstrings.Count > 0 ? ", " + r.Hotstrings.Count + " hotstrings" : "") +
-                  (r.Hotkey != Keys.None ? ", hotkey " + Ui.KeyName(r.Hotkey) : "") + ". Click Add to suite to use it.";
+                  (r.Hotkey != Keys.None ? ", hotkey " + Ui.KeyName(r.Hotkey) : "") + ". Click Add to My macros to use it.";
             scriptStatus.Invalidate();
             return r;
         }
@@ -1829,8 +1938,8 @@ namespace Embris
             PresetStore.Save(presets);
             RefreshPresetList();
             if (select) presetList.SelectedIndex = i;
-            SetStatus(StatusKind.Ready, "Added \"" + preset.Name + "\" to your macro suite",
-                preset.Hotkey != Keys.None ? "Press " + Ui.KeyName(preset.Hotkey) + " anywhere to run it." : "Load it from the Presets page.");
+            SetStatus(StatusKind.Ready, "Added \"" + preset.Name + "\" to My macros",
+                preset.Hotkey != Keys.None ? "Press " + Ui.KeyName(preset.Hotkey) + " anywhere to run it." : "Load it from My macros.");
             return true;
         }
 
@@ -1859,7 +1968,7 @@ namespace Embris
                 ShowPage(4);
                 CheckScript();
                 if (addToSuite) AddScriptToSuite(true);
-                else SetStatus(StatusKind.Ready, "Opened " + Path.GetFileName(path), "Check it, then click Add to suite to use it.");
+                else SetStatus(StatusKind.Ready, "Opened " + Path.GetFileName(path), "Check it, then click Add to My macros to use it.");
             }
             catch (Exception ex)
             {
@@ -1926,7 +2035,7 @@ namespace Embris
             // stretch them into the Record button.
             var open = Add(p, Tagged(new RoundButton { Style = BtnStyle.Chip, Icon = "\uE8E5", Text = "" }, Fixed), 200, 56, 34, 30);
             open.Click += (s, a) => ShowOpenPresetMenu(open);
-            tips.SetToolTip(open, "Open a preset or recording from your suite to edit it");
+            tips.SetToolTip(open, "Open one of your saved macros to edit it");
             var clear = Add(p, Tagged(new RoundButton { Style = BtnStyle.Chip, Icon = "\uE74D", Text = "" }, Fixed), 238, 56, 34, 30);
             clear.Click += (s, a) => ClearSequence();
             tips.SetToolTip(clear, "Clear the sequence (Ctrl+Z brings it back)");
@@ -1946,7 +2055,7 @@ namespace Embris
             e.Record.Click += (s, a) => ToggleRecording();
             e.Save = Add(p, new RoundButton { Style = BtnStyle.Primary, Icon = "", Text = "Save sequence" }, 548, 24, 160, 40);
             e.Save.Click += (s, a) => SaveSequenceToSuite();
-            tips.SetToolTip(e.Save, "Save this sequence as a macro in your suite (see Presets)");
+            tips.SetToolTip(e.Save, "Save these steps as a macro in My macros");
             e.Use = Add(p, new Toggle { Text = "Play this sequence when the macro runs", Checked = settings.UseRecording, Font = Ui.F(9f) }, 388, 70, 320, 26);
             e.Use.CheckedChanged += (s, a) => SetUseRecording(e.Use.Checked);
 
@@ -2533,7 +2642,7 @@ namespace Embris
             var lines = settings.MacroLines();
             settings.UseRecording = use;
             SavePresetLines(name, lines);
-            SetStatus(StatusKind.Ready, "Saved \"" + name + "\" to your macro suite", "Rename it or give it a hotkey on the Presets page.");
+            SetStatus(StatusKind.Ready, "Saved \"" + name + "\" to My macros", "Rename it or give it a hotkey in My macros.");
         }
 
         // ---------- auto clicker: a simple click-at-a-rate tool, separate from the macro ----------
@@ -2963,7 +3072,7 @@ namespace Embris
 
         void BuildKeyBindsPage()
         {
-            var p = Page(10, "Key binds", "Make keys do things: hold R to spam clicks, press F to hold the mouse down, or play a preset.");
+            var p = Page(10, "Key binds", "Make keys do things: hold R to spam clicks, press F to hold the mouse down, or start one of your macros.");
             var listCard = Tagged(Card(p, "Your binds", 32, 100, 300, 436), VFill);
             // All binds on/off, in the list's title row.
             var master = Add(listCard, new Toggle { Text = "All on", Checked = settings.BindsOn, Font = Ui.F(9f) }, 182, 12, 100, 26);
@@ -3060,6 +3169,51 @@ namespace Embris
             RefreshBindList();
             if (binds.Count > 0) bindList.SelectedIndex = 0;
             LoadBind();
+        }
+
+        // ---------- start here: how Embris works, with a button to each place ----------
+
+        void BuildStartPage()
+        {
+            var p = Page(11, "Start here", "Embris presses keys and clicks for you, in Roblox or any app. Four steps:");
+            var steps = Tagged(Card(p, "Make a macro", 32, 100, 676, 238), VFill);
+            string run = Ui.KeyName(settings.Hotkey), rec = Ui.KeyName(settings.RecordHotkey);
+            var rows = new[]
+            {
+                new { Title = "Pick the game and what to do", Text = "On the Macro page: press a key, click, or play something you recorded.", Button = "Macro page", Go = (Action)(() => ShowPage(0)) },
+                new { Title = "Or record yourself", Text = "Click into the game, press " + rec + ", play, press " + rec + " again. Embris copies it.", Button = "See the steps", Go = (Action)(() => ShowPage(2)) },
+                new { Title = "Run it", Text = "Press " + run + " anywhere (or Run macro below). It repeats until you stop it.", Button = "How long", Go = (Action)(() => ShowPage(0)) },
+                new { Title = "Keep it", Text = "Save it in My macros to load it later and give it its own hotkey.", Button = "My macros", Go = (Action)(() => ShowPage(1)) },
+            };
+            for (int i = 0; i < rows.Length; i++)
+            {
+                var r = rows[i];
+                int y = 44 + i * 46;
+                Add(steps, new TextLabel { Text = (i + 1).ToString(), Font = Ui.Semi(15f) }, 18, y, 26, 36);
+                Add(steps, new TextLabel { Text = r.Title, Font = Ui.Semi(10f) }, 48, y, 470, 18);
+                Add(steps, new TextLabel { Text = r.Text, Sub = true, Font = Ui.F(9f) }, 48, y + 18, 470, 18);
+                var go = r.Go;
+                var b = Add(steps, new RoundButton { Text = r.Button, Font = Ui.F(9f) }, 520, y + 2, 138, 32);
+                b.Click += (s, e) => go();
+            }
+
+            var tools = Tagged(Card(p, "Other tools", 32, 352, 676, 184), AtBottom);
+            var more = new[]
+            {
+                new { Title = "Auto clicker", Text = "Click fast without setting anything else up.", Page = 8 },
+                new { Title = "Key binds", Text = "Make a key spam clicks, hold the mouse, or start one of your macros.", Page = 10 },
+                new { Title = "Calibration", Text = "Start every run from exactly the same spot.", Page = 9 },
+            };
+            for (int i = 0; i < more.Length; i++)
+            {
+                var m = more[i];
+                int y = 44 + i * 44;
+                Add(tools, new TextLabel { Text = m.Title, Font = Ui.Semi(10f) }, 18, y + 7, 130, 20);
+                Add(tools, new TextLabel { Text = m.Text, Sub = true, Font = Ui.F(9f) }, 150, y + 8, 368, 20);
+                int page = m.Page;
+                var b = Add(tools, new RoundButton { Text = "Open", Font = Ui.F(9f) }, 520, y + 2, 138, 32);
+                b.Click += (s, e) => ShowPage(page);
+            }
         }
 
         bool IsHotkey(Keys k)
@@ -3176,9 +3330,9 @@ namespace Embris
 
             // Recording: optionally keep every take.
             var recCard = Card(p, "Recording", 32, 278, 676, 104);
-            var autoSave = Add(recCard, new Toggle { Text = "Save each recording to my macro suite", Checked = settings.AutoSaveRecordings }, 18, 44, 330, 30);
+            var autoSave = Add(recCard, new Toggle { Text = "Save each recording to My macros", Checked = settings.AutoSaveRecordings }, 18, 44, 330, 30);
             autoSave.CheckedChanged += (s, e) => { settings.AutoSaveRecordings = autoSave.Checked; settings.Save(); };
-            tips.SetToolTip(autoSave, "Each take is saved as \"Recording\" with the date and time, on the Presets page");
+            tips.SetToolTip(autoSave, "Each take is saved as \"Recording\" with the date and time, in My macros");
             // Frame sync: match Roblox's frame rate so every input lands on the same frame each replay.
             Label(recCard, "Frame sync", 362, 47, 90);
             var frameSync = Add(recCard, new Dropdown(), 452, 40, 206, 32);
@@ -3258,7 +3412,7 @@ namespace Embris
             link.Click += (s, e) =>
             {
                 Program.RegisterFileType(Application.ExecutablePath);
-                SetStatus(StatusKind.Ready, ".emb files now open with Embris", "Double-click a macro file to add it to your suite.");
+                SetStatus(StatusKind.Ready, ".emb files now open with Embris", "Double-click a macro file to add it to My macros.");
             };
 
             // Visuals: how the custom background is drawn.
@@ -3708,6 +3862,7 @@ namespace Embris
             presetList.SelectedIndex = keep < presets.Count ? keep : -1;
             UpdateSuiteKeys();
             if (mini != null) SyncMini();
+            ShowMacroDetails();
         }
 
         // Hotstrings come from every macro in the suite that has them.
@@ -3769,7 +3924,7 @@ namespace Embris
         void BindMacro(string name, MacroCommand cmd)
         {
             int i = presets.FindIndex(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
-            if (i < 0) { SetStatus(StatusKind.Problem, "\"" + name + "\" isn't in your suite", "Pick another preset for that key bind."); return; }
+            if (i < 0) { SetStatus(StatusKind.Problem, "\"" + name + "\" isn't in My macros", "Pick another macro for that key bind."); return; }
             bool runningThis = running && suitePreset == i;
             if (cmd == MacroCommand.Stop) { if (runningThis) Stop(); return; }
             if (cmd == MacroCommand.Start && runningThis) return;
@@ -3796,12 +3951,12 @@ namespace Embris
             string name = txtPresetName.Text.Replace("[", "(").Replace("]", ")").Trim();
             if (name == "")
             {
-                SetStatus(StatusKind.Problem, "Name your preset", "Type a name in the Preset name box first.");
+                SetStatus(StatusKind.Problem, "Name your macro", "Type a name in the box first.");
                 return;
             }
             ReadControls();
             SavePresetLines(name, settings.MacroLines());
-            SetStatus(StatusKind.Ready, "Saved \"" + name + "\"", "Load it any time from the Presets page.");
+            SetStatus(StatusKind.Ready, "Saved \"" + name + "\"", "Load it any time from My macros.");
         }
 
         void SavePresetLines(string name, List<string> lines)
@@ -3852,7 +4007,7 @@ namespace Embris
         {
             int i = presetList.SelectedIndex;
             if (i < 0) return;
-            if (MessageBox.Show(this, "Delete the preset \"" + presets[i].Name + "\"?", "Embris", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            if (MessageBox.Show(this, "Delete the macro \"" + presets[i].Name + "\"?", "Embris", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             presets.RemoveAt(i);
             PresetStore.Save(presets);
             RefreshPresetList();
@@ -4163,7 +4318,7 @@ namespace Embris
             UpdateStatus();
             if (savedTake != null)
             {
-                SetStatus(StatusKind.Ready, "Saved \"" + savedTake + "\"", "It's in your macro suite on the Presets page.");
+                SetStatus(StatusKind.Ready, "Saved \"" + savedTake + "\"", "It's in My macros.");
                 savedTake = null;
             }
         }
@@ -4370,13 +4525,13 @@ namespace Embris
         void ShowOpenPresetMenu(Control button)
         {
             var menu = NewMenu();
-            if (presets.Count == 0) AddMenuItem(menu, "No presets yet: save one on the Presets page", () => { }, false);
+            if (presets.Count == 0) AddMenuItem(menu, "Nothing saved yet: save one in My macros", () => { }, false);
             for (int i = 0; i < presets.Count; i++)
             {
                 int n = i;
                 AddMenuItem(menu, presets[i].Name, () =>
                 {
-                    if (running) { SetStatus(StatusKind.Problem, "Stop the macro first", "Then open the preset."); return; }
+                    if (running) { SetStatus(StatusKind.Problem, "Stop the macro first", "Then open the macro."); return; }
                     presetList.SelectedIndex = n;
                     LoadPreset();
                 }, true);
