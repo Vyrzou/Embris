@@ -344,6 +344,8 @@ namespace Embris
         public int BgGlass = 1;     // see-through cards: 0 always, 1 only when the window is small, 2 never
         public bool SnapToKeys = true; // timeline: bars catch other bars' edges
         public bool AutoSaveRecordings = false; // every recording also goes into the macro suite
+        public int RunMode = 0;       // how long the macro runs: 0 until stopped, 1 a number of times, 2 once
+        public int RunTimes = 10;     // for RunMode 1
         public bool BindsOn = true;   // key binds active
         public string Binds = "";     // key binds (see KeyBind.SaveAll)
         public int FrameSync = 0;   // playback lines inputs up with the game's frames: 0 off, -1 the display's refresh rate, else that frame rate
@@ -396,7 +398,7 @@ namespace Embris
                 "IntervalSec=" + IntervalSec.ToString(Inv), "ClickEnabled=" + ClickEnabled, "RightClick=" + RightClick,
                 "ClickX=" + ClickX, "ClickY=" + ClickY, "TargetProcess=" + TargetProcess, "Mode=" + Mode,
                 "WaitIdle=" + WaitIdle, "IdleSec=" + IdleSec.ToString(Inv),
-                "UseRecording=" + UseRecording, "Speed=" + Speed.ToString("R", Inv), "Repeat=" + Repeat, "Recording=" + Recording
+                "UseRecording=" + UseRecording, "Speed=" + Speed.ToString("R", Inv), "Repeat=" + Repeat, "RunMode=" + RunMode, "RunTimes=" + RunTimes, "Recording=" + Recording
             };
         }
 
@@ -441,6 +443,8 @@ namespace Embris
                 if (d.ContainsKey("SpeedIndex")) Speed = d["SpeedIndex"] == "0" ? 0.5 : d["SpeedIndex"] == "2" ? 2 : 1; // older versions
                 if (d.ContainsKey("Speed")) Speed = ClampSpeed(double.Parse(d["Speed"], Inv));
                 if (d.ContainsKey("Repeat")) Repeat = Math.Max(1, int.Parse(d["Repeat"]));
+                if (d.ContainsKey("RunMode")) RunMode = Math.Max(0, Math.Min(2, int.Parse(d["RunMode"])));
+                if (d.ContainsKey("RunTimes")) RunTimes = Math.Max(1, int.Parse(d["RunTimes"]));
                 if (d.ContainsKey("Recording")) Recording = d["Recording"];
                 if (d.ContainsKey("Hotkey")) Hotkey = (Keys)int.Parse(d["Hotkey"]);
                 if (d.ContainsKey("RecordHotkey")) RecordHotkey = (Keys)int.Parse(d["RecordHotkey"]);
@@ -979,6 +983,7 @@ namespace Embris
         public MainForm()
         {
             sequence = RecStep.Parse(settings.Recording);
+            if (sequence.Count == 0) settings.UseRecording = false; // nothing recorded: the key press / click runs
 
             SuspendLayout();
             AutoScaleDimensions = new SizeF(96f, 96f);
@@ -1555,7 +1560,7 @@ namespace Embris
 
         void BuildMacroPage()
         {
-            var p = Page(0, "Macro", "Choose the app, what to press or click, and how often.");
+            var p = Page(0, "Macro", "Pick the app, what to do, and how long. Then press Run.");
 
             cardTarget = Card(p, "Target app", 32, 100, 330, 236);
             Label(cardTarget, "App to send input to", 18, 48, 294);
@@ -1571,39 +1576,95 @@ namespace Embris
             numIdle = Num(cardTarget, 0, 1000000, 1, 0.5m, settings.IdleSec, 196, 184, 80);
             Label(cardTarget, "sec", 284, 191, 30);
 
-            cardTiming = Card(p, "Timing", 32, 352, 330, 180);
-            Label(cardTiming, "Repeat every (seconds)", 18, 48, 294);
-            numInterval = Num(cardTiming, 0.001m, MaxIntervalSec, 3, 1, settings.IntervalSec, 18, 70, 140);
-            lblIntervalHint = Label(cardTiming, "", 172, 77, 140);
-            numInterval.ValueChanged += (s, e) => UpdateIntervalHint();
+            // How long: until stopped (the default), a number of times, or once.
+            cardTiming = Card(p, "How long", 32, 352, 330, 180);
+            string[] runNames = { "Until I stop it", "A number of times", "Once" };
+            int[] runX = { 18, 124, 248 }, runW = { 100, 118, 64 };
+            for (int i = 0; i < 3; i++)
+            {
+                int n = i;
+                runChips[i] = Add(cardTiming, new RoundButton { Style = BtnStyle.Chip, Text = runNames[i], Font = Ui.F(9f) }, runX[i], 44, runW[i], 30);
+                runChips[i].Click += (s, e) => SetRunMode(n);
+            }
+            lblInterval = Label(cardTiming, "Wait between runs (sec)", 18, 86, 164);
+            numInterval = Num(cardTiming, 0.001m, MaxIntervalSec, 3, 1, settings.IntervalSec, 18, 108, 100);
+            lblIntervalHint = Label(cardTiming, "", 124, 115, 60);
+            numInterval.ValueChanged += (s, e) => { UpdateIntervalHint(); UpdateRunSummary(); };
+            tips.SetToolTip(numInterval, "Time from the start of one run to the next (a sequence always finishes first)");
+            lblTimes = Label(cardTiming, "Times", 196, 86, 116);
+            numTimes = Num(cardTiming, 1, int.MaxValue, 0, 1, settings.RunTimes, 196, 108, 116);
+            numTimes.ValueChanged += (s, e) => { settings.RunTimes = (int)numTimes.Value; UpdateRunSummary(); };
+            lblRunSummary = Add(cardTiming, new TextLabel { Sub = true, Wrap = true, Font = Ui.F(9f) }, 18, 146, 294, 30);
             UpdateIntervalHint();
-            // Calibration overlay: crosshair + ghost of the start view over the game.
-            calibrationToggle = Add(cardTiming, new Toggle { Text = "Calibration (" + Ui.KeyName(settings.OverlayHotkey) + ")" }, 18, 122, 150, 30);
-            // How see-through the ghost of the start view is.
-            GhostSlider(cardTiming, 172, 122, 100);
-            WireCalibrationToggle(calibrationToggle);
 
-            cardKey = Card(p, "Key press", 378, 100, 330, 166);
-            chkKey = Add(cardKey, new Toggle { Text = "Press a key", Checked = settings.PressKey }, 18, 46, 200, 30);
-            Label(cardKey, "Key", 18, 88, 150);
-            keyAction = Add(cardKey, new KeyBox { Key = settings.ActionKey }, 18, 110, 150, 34);
-            Label(cardKey, "Hold for (ms)", 184, 88, 128);
-            numHold = Num(cardKey, 0, MaxHoldMs, 0, 10, settings.HoldMs, 184, 110, 128);
+            // What to do: play the recorded sequence, or a simple key press and/or click.
+            cardKey = Card(p, "What to do", 378, 100, 330, 436);
+            cardClick = cardKey;
+            chkSeqMain = Add(cardKey, new Toggle { Text = "Play my recorded sequence", Checked = settings.UseRecording }, 18, 44, 240, 30);
+            chkSeqMain.CheckedChanged += (s, e) => { if (chkUseRec != null && chkUseRec.Checked != chkSeqMain.Checked) chkUseRec.Checked = chkSeqMain.Checked; };
+            tips.SetToolTip(chkSeqMain, "Plays the steps from the sequence and timeline editors instead of a single key or click");
+            lblSeqSummary = Add(cardKey, new TextLabel { Sub = true, Font = Ui.F(9f) }, 18, 82, 196, 22);
+            var editSeq = Add(cardKey, new RoundButton { Icon = "", Text = "Edit", Font = Ui.F(9f) }, 222, 76, 90, 30);
+            editSeq.Click += (s, e) => ShowPage(2);
+            lblSimpleNote = Add(cardKey, new TextLabel { Sub = true, Wrap = true, Font = Ui.F(9f) }, 18, 114, 294, 22);
 
-            cardClick = Card(p, "Mouse click", 378, 282, 330, 250);
-            chkClick = Add(cardClick, new Toggle { Text = "Click at a position", Checked = settings.ClickEnabled }, 18, 46, 176, 30);
-            btnLeft = Add(cardClick, new RoundButton { Style = BtnStyle.Chip, Text = "Left", Font = Ui.F(9f) }, 196, 47, 56, 28);
-            btnRight = Add(cardClick, new RoundButton { Style = BtnStyle.Chip, Text = "Right", Font = Ui.F(9f) }, 256, 47, 56, 28);
+            chkKey = Add(cardKey, new Toggle { Text = "Press a key", Checked = settings.PressKey }, 18, 140, 200, 30);
+            simpleControls.Add(chkKey);
+            simpleControls.Add(Label(cardKey, "Key", 18, 178, 150));
+            keyAction = Add(cardKey, new KeyBox { Key = settings.ActionKey }, 18, 200, 150, 34);
+            simpleControls.Add(keyAction);
+            simpleControls.Add(Label(cardKey, "Hold for (ms)", 184, 178, 128));
+            numHold = Num(cardKey, 0, MaxHoldMs, 0, 10, settings.HoldMs, 184, 200, 128);
+            simpleControls.Add(numHold);
+
+            chkClick = Add(cardKey, new Toggle { Text = "Click the mouse", Checked = settings.ClickEnabled }, 18, 252, 176, 30);
+            btnLeft = Add(cardKey, new RoundButton { Style = BtnStyle.Chip, Text = "Left", Font = Ui.F(9f) }, 196, 253, 56, 28);
+            btnRight = Add(cardKey, new RoundButton { Style = BtnStyle.Chip, Text = "Right", Font = Ui.F(9f) }, 256, 253, 56, 28);
             btnLeft.Click += (s, e) => SetClickButton(false);
             btnRight.Click += (s, e) => SetClickButton(true);
             SetClickButton(settings.RightClick);
-            Label(cardClick, "X", 18, 88, 88);
-            Label(cardClick, "Y", 114, 88, 88);
-            numX = Num(cardClick, -MaxPos, MaxPos, 0, 1, settings.ClickX, 18, 110, 88);
-            numY = Num(cardClick, -MaxPos, MaxPos, 0, 1, settings.ClickY, 114, 110, 88);
-            btnPick = Add(cardClick, new RoundButton { Text = "Pick (3s)" }, 210, 110, 102, 34);
+            simpleControls.Add(Label(cardKey, "X", 18, 292, 88));
+            simpleControls.Add(Label(cardKey, "Y", 114, 292, 88));
+            numX = Num(cardKey, -MaxPos, MaxPos, 0, 1, settings.ClickX, 18, 314, 88);
+            numY = Num(cardKey, -MaxPos, MaxPos, 0, 1, settings.ClickY, 114, 314, 88);
+            btnPick = Add(cardKey, new RoundButton { Text = "Pick (3s)" }, 210, 314, 102, 34);
             btnPick.Click += (s, e) => StartPick(btnPick, numX, numY, () => chkClick.Checked = true);
-            lblCursor = Label(cardClick, "", 18, 154, 294);
+            lblCursor = Label(cardKey, "", 18, 358, 294);
+            simpleControls.AddRange(new Control[] { chkClick, btnLeft, btnRight, numX, numY, btnPick, lblCursor });
+            SetRunMode(settings.RunMode);
+        }
+
+        // ---------- the Macro page's "How long" and "What to do" ----------
+
+        readonly RoundButton[] runChips = new RoundButton[3];
+        NumberBox numTimes;
+        TextLabel lblInterval, lblTimes, lblRunSummary, lblSeqSummary, lblSimpleNote;
+        Toggle chkSeqMain;
+        readonly List<Control> simpleControls = new List<Control>(); // the key press and click settings
+
+        void SetRunMode(int mode)
+        {
+            settings.RunMode = Math.Max(0, Math.Min(2, mode));
+            for (int i = 0; i < 3; i++) { runChips[i].Selected = i == settings.RunMode; runChips[i].Invalidate(); }
+            // Once needs no wait; only "a number of times" needs a count.
+            lblInterval.Visible = numInterval.Visible = lblIntervalHint.Visible = settings.RunMode != 2;
+            lblTimes.Visible = numTimes.Visible = settings.RunMode == 1;
+            settings.Save();
+            UpdateRunSummary();
+        }
+
+        // One sentence for what Run will do, so there's no guessing.
+        void UpdateRunSummary()
+        {
+            if (lblRunSummary == null) return;
+            string every = "every " + lblIntervalHint.Text.TrimStart('=', ' ');
+            string stop = Ui.KeyName(settings.Hotkey);
+            switch (settings.RunMode)
+            {
+                case 1: lblRunSummary.Text = "Runs " + (int)numTimes.Value + " times, " + every + ", then stops."; break;
+                case 2: lblRunSummary.Text = "Runs once, then stops."; break;
+                default: lblRunSummary.Text = "Runs " + every + " until you press " + stop + " or Stop."; break;
+            }
         }
 
         void BuildPresetsPage()
@@ -1929,6 +1990,7 @@ namespace Embris
         {
             settings.UseRecording = on;
             foreach (var e in editors) if (e != null) e.Use.Checked = on;
+            if (chkSeqMain != null && chkSeqMain.Checked != on) chkSeqMain.Checked = on;
             UpdateSequenceEnabled();
         }
 
@@ -3107,7 +3169,7 @@ namespace Embris
                 settings.OverlayHotkey = k;
                 hotkeyHook.OverlayKeyCode = (int)k;
                 settings.Save();
-                calibrationToggle.Text = "Calibration (" + Ui.KeyName(k) + ")";
+                if (calibrationToggle != null) calibrationToggle.Text = "Calibration (" + Ui.KeyName(k) + ")";
                 overlayPageToggle.Text = "Show the overlay (" + Ui.KeyName(k) + ")";
             };
             tips.SetToolTip(keyOverlay, "Shows or hides the crosshair and the ghost of your start view over the game");
@@ -3545,11 +3607,13 @@ namespace Embris
             numIdle.Enabled = on;
         }
 
-        // The single key / click settings don't apply while a sequence plays instead.
+        // The single key / click settings don't apply while a sequence plays instead (and say so).
         void UpdateSequenceEnabled()
         {
-            if (running) return;
-            cardKey.Enabled = cardClick.Enabled = !chkUseRec.Checked;
+            if (running || chkUseRec == null) return;
+            bool seq = chkUseRec.Checked;
+            foreach (var c in simpleControls) c.Enabled = !seq;
+            lblSimpleNote.Text = seq ? "Off while the sequence plays:" : "Or press a key and/or click:";
         }
 
         // Lists every app with a visible window; keeps the saved target even if it isn't running.
@@ -3620,6 +3684,8 @@ namespace Embris
             chkIdle.Checked = settings.WaitIdle;
             numIdle.Value = settings.IdleSec;
             chkUseRec.Checked = settings.UseRecording;
+            numTimes.Value = settings.RunTimes;
+            SetRunMode(settings.RunMode);
             editors[0].Speed.Value = (decimal)settings.Speed;
             editors[0].Repeat.Value = settings.Repeat;
             cboTarget.SelectedIndex = -1;
@@ -3767,6 +3833,7 @@ namespace Embris
             if (i < 0 || running) return;
             settings.Apply(Settings.ParseLines(presets[i].Lines));
             sequence = RecStep.Parse(settings.Recording);
+            if (sequence.Count == 0) settings.UseRecording = false; // nothing recorded: the key press / click runs
             // A simple preset (press a key / click every so often) becomes the same steps as a sequence,
             // so it shows in the editors and can be edited there. It runs just as before.
             if (!settings.UseRecording || sequence.Count == 0)
@@ -3900,7 +3967,12 @@ namespace Embris
             to.Add(undoCurrent);
             undoCurrent = from[from.Count - 1];
             from.RemoveAt(from.Count - 1);
+            bool wasEmpty = sequence.Count == 0;
             sequence = RecStep.Parse(undoCurrent);
+            // Steps back after a clear: play them again; nothing left: back to the key press / click.
+            if (wasEmpty && sequence.Count > 0 && !chkUseRec.Checked) chkUseRec.Checked = true;
+            else if (sequence.Count == 0 && chkUseRec.Checked) chkUseRec.Checked = false;
+            settings.UseRecording = chkUseRec.Checked;
             settings.Recording = undoCurrent;
             settings.Save();
             UpdateSequenceViews();
@@ -3970,6 +4042,7 @@ namespace Embris
             }
             string summary = SequenceSummary();
             foreach (var e in editors) e.Summary.Text = summary;
+            if (lblSeqSummary != null) lblSeqSummary.Text = sequence.Count == 0 ? "Nothing recorded yet" : summary;
             UpdateTimeLabels();
             lblBuilderSteps.Text = sequence.Count == 0 ? "No steps yet. Pick Key, Click or Wait above and click Add step."
                 : FormatSteps(LinesThatFit(lblBuilderSteps), true);
@@ -4146,7 +4219,7 @@ namespace Embris
 
         void ReadControls()
         {
-            foreach (var n in new[] { numIdle, numHold, numInterval, numX, numY, builderRepeat, builderSpeed, editors[0].Speed, editors[0].Repeat, editors[1].Speed, editors[1].Repeat }) n.Commit();
+            foreach (var n in new[] { numIdle, numHold, numInterval, numTimes, numX, numY, builderRepeat, builderSpeed, editors[0].Speed, editors[0].Repeat, editors[1].Speed, editors[1].Repeat }) n.Commit();
             settings.PressKey = chkKey.Checked;
             settings.ActionKey = keyAction.Key;
             settings.HoldMs = (int)numHold.Value;
@@ -4161,6 +4234,7 @@ namespace Embris
             settings.UseRecording = chkUseRec.Checked;
             settings.Speed = (double)editors[0].Speed.Value;
             settings.Repeat = (int)editors[0].Repeat.Value;
+            settings.RunTimes = (int)numTimes.Value;
             settings.Recording = RecStep.Serialize(sequence);
             var target = cboTarget.SelectedItem as TargetItem;
             if (target != null) settings.TargetProcess = target.ProcessName;
@@ -4322,6 +4396,7 @@ namespace Embris
             if (sequence.Count == 0) return;
             if (running && settings.UseRecording) Stop();
             sequence.Clear();
+            if (chkUseRec.Checked) chkUseRec.Checked = false; // nothing left to play: back to the key press / click
             SequenceChanged();
             if (stepTable != null) stepTable.SelectRows(-1, -1);
             SetStatus(StatusKind.Ready, "Sequence cleared", "Ctrl+Z or the undo button brings it back.");
@@ -4353,6 +4428,12 @@ namespace Embris
                         UpdateTimeLabels();
                         actionCount++;
                         if (testing) { Stop(); SetStatus(StatusKind.Ready, "Test finished", "Change anything you like and test again."); }
+                        else if (running && (settings.RunMode == 2 || (settings.RunMode == 1 && actionCount >= settings.RunTimes)))
+                        {
+                            // "Once" or "a number of times": done.
+                            Stop();
+                            SetStatus(StatusKind.Ready, "Done", "Ran " + actionCount + (actionCount == 1 ? " time." : " times."));
+                        }
                         else if (running) UpdateStatus();
                     }));
                 }

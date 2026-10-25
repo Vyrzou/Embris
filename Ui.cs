@@ -8,8 +8,8 @@ using System.Windows.Forms;
 
 [assembly: System.Reflection.AssemblyTitle("Embris")]
 [assembly: System.Reflection.AssemblyProduct("Embris")]
-[assembly: System.Reflection.AssemblyVersion("1.7.1.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.7.1.0")]
+[assembly: System.Reflection.AssemblyVersion("1.7.2.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.7.2.0")]
 
 namespace Embris
 {
@@ -56,7 +56,7 @@ namespace Embris
 
     static class Ui
     {
-        public const string Version = "1.7.1"; // keep in step with the assembly attributes above
+        public const string Version = "1.7.2"; // keep in step with the assembly attributes above
 
         public static readonly Color Danger = Color.FromArgb(229, 72, 77);
         public static readonly Color Success = Color.FromArgb(48, 196, 141);

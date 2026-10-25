@@ -707,6 +707,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         global T
         self.s = core.load_settings()
+        if not self.s.get("sequence"):
+            self.s["use_sequence"] = False  # nothing recorded: the key press / click runs
         self.presets = core.load_presets()
         colors = self.s.get("theme_colors")
         T = Theme(self.s["theme_name"], *colors) if isinstance(colors, list) and len(colors) == 5 else PRESETS[0].copy()
@@ -998,7 +1000,7 @@ class MainWindow(QMainWindow):
         self.build_key_binds()
 
     def build_macro(self):
-        v = self.page("Macro", "Choose the game, what to press or click, and how often.")
+        v = self.page("Macro", "Pick the game, what to do, and how long. Then press Run.")
         s = self.s
         grid = QGridLayout()
         grid.setSpacing(16)
@@ -1024,34 +1026,70 @@ class MainWindow(QMainWindow):
         grid.addWidget(c, 0, 0)
         self.card_target = c
 
-        c, g = self.card("Key press")
+        c, g = self.card("What to do")
+        # The recorded sequence, or a simple key press and/or click.
+        self.t_seq_main = Toggle("Play my recorded sequence", s["use_sequence"])
+        self.t_seq_main.setToolTip("Plays the steps from the sequence and timeline editors instead of a single key or click")
+        self.t_seq_main.toggled.connect(lambda on: self.t_seq.setChecked(on) if hasattr(self, "t_seq") and self.t_seq.isChecked() != on else None)
+        g.addWidget(self.t_seq_main, 1, 0, 1, 2)
+        seq_row = QHBoxLayout()
+        self.seq_summary = label("", "sub")
+        seq_row.addWidget(self.seq_summary, 1)
+        seq_row.addWidget(push("Edit", slot=lambda: self.show_page(2)))
+        g.addLayout(seq_row, 2, 0, 1, 2)
+        self.simple_note = label("", "sub")
+        g.addWidget(self.simple_note, 3, 0, 1, 2)
+        self.key_box_card = QWidget()
+        kg = QGridLayout(self.key_box_card)
+        kg.setContentsMargins(0, 0, 0, 0)
         self.t_key = Toggle("Press a key", s["press_key"])
-        g.addWidget(self.t_key, 1, 0, 1, 2)
-        g.addWidget(label("Key", "sub"), 2, 0)
-        g.addWidget(label("Hold for (ms)", "sub"), 2, 1)
+        kg.addWidget(self.t_key, 0, 0, 1, 2)
+        kg.addWidget(label("Key", "sub"), 1, 0)
+        kg.addWidget(label("Hold for (ms)", "sub"), 1, 1)
         self.key_box = KeyBox(s["key"], self.pause_hotkey)
-        g.addWidget(self.key_box, 3, 0)
+        kg.addWidget(self.key_box, 2, 0)
         self.sp_hold = spin(s["hold_ms"], 0, 2147483647)
-        g.addWidget(self.sp_hold, 3, 1)
+        kg.addWidget(self.sp_hold, 2, 1)
+        kg.setColumnStretch(0, 1)
+        kg.setColumnStretch(1, 1)
+        g.addWidget(self.key_box_card, 4, 0, 1, 2)
         g.setColumnStretch(0, 1)
-        g.setColumnStretch(1, 1)
-        g.setRowStretch(4, 1)
+        g.setRowStretch(5, 1)
         grid.addWidget(c, 0, 1)
-        self.card_key = c
+        self.card_key = self.key_box_card
 
-        c, g = self.card("Timing")
-        g.addWidget(label("Repeat every (seconds)", "sub"), 1, 0, 1, 2)
+        c, g = self.card("How long")
+        # Until stopped (the default), a number of times, or once.
+        runs = QHBoxLayout()
+        runs.setSpacing(6)
+        self.run_group = QButtonGroup(self)
+        self.run_chips = []
+        for n, name in enumerate(("Until I stop it", "A number of times", "Once")):
+            b = push(name, "chip", checkable=True)
+            b.clicked.connect(lambda _=False, n=n: self.set_run_mode(n))
+            self.run_group.addButton(b)
+            self.run_chips.append(b)
+            runs.addWidget(b)
+        runs.addStretch()
+        g.addLayout(runs, 1, 0, 1, 3)
+        self.interval_label = label("Wait between runs (sec)", "sub")
+        g.addWidget(self.interval_label, 2, 0, 1, 2)
+        self.times_label = label("Times", "sub")
+        g.addWidget(self.times_label, 2, 2)
         self.sp_interval = spin(s["interval"], 0.001, 2147483, 3, 1)
-        self.sp_interval.setMaximumWidth(160)
+        self.sp_interval.setMaximumWidth(140)
         self.sp_interval.valueChanged.connect(self.update_interval_hint)
-        g.addWidget(self.sp_interval, 2, 0)
+        g.addWidget(self.sp_interval, 3, 0)
         self.interval_hint = label("", "sub")
-        g.addWidget(self.interval_hint, 2, 1)
+        g.addWidget(self.interval_hint, 3, 1)
+        self.sp_times = spin(int(s.get("run_times", 10)), 1, 2147483647)
+        self.sp_times.valueChanged.connect(lambda val: (self.s.update(run_times=int(val)), self.update_run_summary()))
+        g.addWidget(self.sp_times, 3, 2)
+        self.run_summary = label("", "sub", wrap=True)
+        g.addWidget(self.run_summary, 4, 0, 1, 3)
+        # The calibration switch and ghost slider live on the Calibration page now; these stay in step with it.
         self.t_calibration = Toggle("Calibration (%s)" % key_label(self.s.get("overlay_hotkey") or "f10"), False)
-        self.t_calibration.setToolTip("Shows a crosshair and a faded ghost of your start view over the game, to line every run up the same way")
         self.t_calibration.toggled.connect(lambda on: None if on == (self.overlay is not None and self.overlay.isVisible()) else self.toggle_overlay())
-        g.addWidget(self.t_calibration, 3, 0)
-        # How see-through the ghost of the start view is.
         ghost_row = QHBoxLayout()
         self.ghost_slider = QSlider(Qt.Orientation.Horizontal)
         self.ghost_slider.setRange(0, 100)
@@ -1061,12 +1099,12 @@ class MainWindow(QMainWindow):
         self.ghost_slider.valueChanged.connect(self.set_ghost_opacity)
         ghost_row.addWidget(self.ghost_slider, 1)
         ghost_row.addWidget(self.ghost_text)
-        g.addLayout(ghost_row, 3, 1)
         g.setColumnStretch(1, 1)
-        g.setRowStretch(4, 1)
+        g.setRowStretch(5, 1)
         grid.addWidget(c, 1, 0)
         self.card_timing = c
         self.update_interval_hint()
+        self.set_run_mode(int(s.get("run_mode", 0)))
 
         c, g = self.card("Mouse click")
         self.t_click = Toggle("Click at a position", s["click"])
@@ -1249,7 +1287,7 @@ class MainWindow(QMainWindow):
         sub_row.addWidget(summary)
         open_btn = push("📂", "chip", lambda: self.show_open_preset_menu(open_btn))
         open_btn.setToolTip("Open a preset or recording from your suite to edit it")
-        clear_btn = push("🗑", "chip", self.clear_sequence)
+        clear_btn = push("🗑", "chip", self.clear_editor_sequence)
         clear_btn.setToolTip("Clear the sequence (Ctrl+Z brings it back)")
         for b in (open_btn, clear_btn):
             b.setFixedWidth(36)
@@ -2555,6 +2593,32 @@ class MainWindow(QMainWindow):
         else:
             text = "= %g hours" % round(sec / 3600, 2)
         self.interval_hint.setText(text)
+        self.update_run_summary()
+
+    def set_run_mode(self, mode):
+        """How long the macro runs: 0 until stopped, 1 a number of times, 2 once."""
+        mode = max(0, min(2, int(mode)))
+        self.s["run_mode"] = mode
+        self.run_chips[mode].setChecked(True)
+        for w in (self.interval_label, self.sp_interval, self.interval_hint):
+            w.setVisible(mode != 2)  # once needs no wait
+        for w in (self.times_label, self.sp_times):
+            w.setVisible(mode == 1)
+        self.update_run_summary()
+
+    def update_run_summary(self):
+        """One sentence for what Run will do."""
+        if not hasattr(self, "run_summary"):
+            return
+        every = "every " + self.interval_hint.text().lstrip("= ")
+        mode = int(self.s.get("run_mode", 0))
+        if mode == 1:
+            text = "Runs %d times, %s, then stops." % (int(self.sp_times.value()), every)
+        elif mode == 2:
+            text = "Runs once, then stops."
+        else:
+            text = "Runs %s until you press %s or Stop." % (every, key_label(self.s["hotkey"]))
+        self.run_summary.setText(text)
 
     def update_enabled(self):
         if self.running:
@@ -2565,6 +2629,7 @@ class MainWindow(QMainWindow):
         use_seq = self.t_seq.isChecked() if hasattr(self, "t_seq") else False
         self.card_key.setEnabled(not use_seq)
         self.card_click.setEnabled(not use_seq)
+        self.simple_note.setText("Key press and click are off while the sequence plays." if use_seq else "Or press a key (and/or click, below):")
 
     def track(self):
         """Tells the watcher where Embris is (so recording skips it) and shows the mouse position."""
@@ -2621,6 +2686,7 @@ class MainWindow(QMainWindow):
         s["right_click"] = self.b_right.isChecked()
         s["x"], s["y"] = int(self.sp_x.value()), int(self.sp_y.value())
         s["interval"] = self.sp_interval.value()
+        s["run_times"] = int(self.sp_times.value())
         s["focus_app"] = self.t_focus.isChecked()
         s["app_name"] = self.e_app.text().strip() or core.DEFAULTS["app_name"]
         s["wait_idle"] = self.t_idle.isChecked()
@@ -2639,6 +2705,8 @@ class MainWindow(QMainWindow):
         self.sp_x.setValue(s["x"])
         self.sp_y.setValue(s["y"])
         self.sp_interval.setValue(float(s["interval"]))
+        self.sp_times.setValue(int(s.get("run_times", 10)))
+        self.set_run_mode(int(s.get("run_mode", 0)))
         self.t_focus.setChecked(s["focus_app"])
         self.e_app.setText(s["app_name"])
         self.t_idle.setChecked(s["wait_idle"])
@@ -2735,13 +2803,14 @@ class MainWindow(QMainWindow):
         self.preset_list.setCurrentRow(n)
         self.load_preset()
 
-    def clear_sequence(self):
+    def clear_editor_sequence(self):
         """The editors' clear button: empties the sequence (undo brings it back)."""
         if not self.seq:
             return
         if self.running and self.s.get("use_sequence"):
             self.stop()
         self.seq.clear()
+        self.t_seq.setChecked(False)  # nothing left to play: back to the key press / click
         self.sequence_changed()
         self.set_status("ready", "Sequence cleared", "Ctrl+Z or the undo button brings it back.")
 
@@ -2894,6 +2963,11 @@ class MainWindow(QMainWindow):
             e["use"].blockSignals(False)
             e["use"].update()
         self.s["use_sequence"] = bool(on)
+        if hasattr(self, "t_seq_main") and self.t_seq_main.isChecked() != bool(on):
+            self.t_seq_main.blockSignals(True)
+            self.t_seq_main.setChecked(bool(on))
+            self.t_seq_main.blockSignals(False)
+            self.t_seq_main.update()
         self.update_enabled()
 
     def set_repeat(self, value):
@@ -2944,6 +3018,8 @@ class MainWindow(QMainWindow):
             sum(st["d"] for st in seq) / 1000.0))
         for e in self.editors:
             e["summary"].setText(summary)
+        if hasattr(self, "seq_summary"):
+            self.seq_summary.setText(summary if self.seq else "Nothing recorded yet")
         self.update_time_labels()
 
     # ----- sequence editor
@@ -3639,6 +3715,12 @@ class MainWindow(QMainWindow):
             self.set_status("problem", "Couldn't send input", error)
         else:
             self.runs += 1
+            mode = int(self.s.get("run_mode", 0))
+            if mode == 2 or (mode == 1 and self.runs >= int(self.s.get("run_times", 10))):
+                # "Once" or "a number of times": done.
+                self.stop()
+                self.set_status("ready", "Done", "Ran %d time%s." % (self.runs, "" if self.runs == 1 else "s"))
+                return
             self.update_status()
 
     # ----- status
